@@ -1,0 +1,7 @@
+{
+  "name": "Amazon Recovery Pro - Complaints Authority",
+  "description": "المنصة الرسمية والوحيدة المختصة بإيقاف المهام البرمجية المتعثرة وتقديم شكاوي رسمية لاسترداد الأموال.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

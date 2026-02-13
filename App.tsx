@@ -1,12 +1,52 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Header from './components/Header.tsx';
 import RecoveryForm from './components/RecoveryForm.tsx';
 import LiveStatus from './components/LiveStatus.tsx';
 import BottomNav from './components/BottomNav.tsx';
+import Auth from './components/Auth.tsx';
+import { supabase } from './lib/supabase.ts';
 
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState('Home');
+  const [session, setSession] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const checkSession = async () => {
+      try {
+        // Safe destructuring to handle potential null data
+        const { data } = await supabase.auth.getSession();
+        setSession(data?.session || null);
+      } catch (err) {
+        console.error('Supabase auth error:', err);
+        setSession(null);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    checkSession();
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#F4F7F9]">
+        <div className="w-12 h-12 border-4 border-[#9B4A4E] border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <Auth />;
+  }
 
   return (
     <div className="flex flex-col min-h-screen max-w-[430px] mx-auto bg-[#F4F7F9] relative pb-24">

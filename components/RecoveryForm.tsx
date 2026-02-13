@@ -1,6 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { ShieldAlert, Gavel, Send, Headphones, ChevronRight, MoreVertical, CheckCheck } from 'lucide-react';
+import { ShieldAlert, Gavel, Send, Headphones, ChevronRight, MoreVertical, CheckCheck, Loader2 } from 'lucide-react';
+import { supabase } from '../lib/supabase.ts';
 
 interface Message {
   id: number;
@@ -11,6 +12,8 @@ interface Message {
 
 const RecoveryForm: React.FC = () => {
   const [isChatActive, setIsChatActive] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [userProfile, setUserProfile] = useState<any>(null);
   const [formData, setFormData] = useState({
     link: '',
     missionId: '',
@@ -20,6 +23,17 @@ const RecoveryForm: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    async function fetchUser() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data } = await supabase.from('profiles').select('*').eq('id', user.id).single();
+        setUserProfile(data);
+      }
+    }
+    fetchUser();
+  }, []);
 
   const scrollToBottom = () => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -31,13 +45,30 @@ const RecoveryForm: React.FC = () => {
     }
   }, [messages, isChatActive]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    const initialMessage = `
+    setLoading(true);
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("يجب تسجيل الدخول أولاً");
+
+      // 1. حفظ الشكوى في قاعدة البيانات
+      const { error } = await supabase.from('complaints').insert([{
+        user_id: user.id,
+        platform_link: formData.link,
+        mission_id: formData.missionId,
+        amount: parseFloat(formData.amount),
+        reason: formData.reason
+      }]);
+
+      if (error) throw error;
+
+      // 2. تفعيل واجهة الدردشة
+      const initialMessage = `
 🏛️ *بلاغ رسمي: طلب استرداد رصيد* 🏛️
 
-👤 **كود العميل:** 616535
+👤 **كود العميل:** ${userProfile?.customer_code || '------'}
 🌐 **رابط المنصة:** ${formData.link || 'غير محدد'}
 🔢 **رقم المهمة:** #${formData.missionId || '00'}
 💰 **المبلغ المحتجز:** ${formData.amount || '0.00'} USDT
@@ -47,26 +78,32 @@ const RecoveryForm: React.FC = () => {
 لقد قمت بتقديم هذا البلاغ رسمياً لمكتب فض النزاعات. أطلب التدخل الفوري لإيقاف المهمة برمجياً وفك تجميد الرصيد وإعادته للمحفظة.
     `.trim();
 
-    const newMsg: Message = {
-      id: Date.now(),
-      text: initialMessage,
-      sender: 'user',
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    };
-
-    setMessages([newMsg]);
-    setIsChatActive(true);
-
-    // الرد التلقائي من الدعم
-    setTimeout(() => {
-      const supportReply: Message = {
-        id: Date.now() + 1,
-        text: "مرحباً بك في وحدة معالجة الشكاوى التقنية. تم استلام بلاغك بنجاح وجاري ربط حسابك بنظام 'Recovery Pro' لتعطيل كود المهمة رقم #" + (formData.missionId || '0') + ". يرجى تزويدنا بصورة من لقطة الشاشة للمهمة العالقة إذا أمكن.",
-        sender: 'support',
+      const newMsg: Message = {
+        id: Date.now(),
+        text: initialMessage,
+        sender: 'user',
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       };
-      setMessages(prev => [...prev, supportReply]);
-    }, 2000);
+
+      setMessages([newMsg]);
+      setIsChatActive(true);
+
+      // الرد التلقائي من الدعم
+      setTimeout(() => {
+        const supportReply: Message = {
+          id: Date.now() + 1,
+          text: `مرحباً بك سيد/ة ${userProfile?.full_name || ''} في وحدة معالجة الشكاوى التقنية. تم تسجيل بلاغك في قاعدة بياناتنا برقم مرجعي فريد. جاري الآن فحص الرابط ${formData.link} لتعطيل كود المهمة رقم #${formData.missionId}. يرجى البقاء متصلاً.`,
+          sender: 'support',
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        };
+        setMessages(prev => [...prev, supportReply]);
+      }, 2000);
+
+    } catch (err: any) {
+      alert("خطأ أثناء إرسال الشكوى: " + err.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleSendMessage = () => {
@@ -84,7 +121,6 @@ const RecoveryForm: React.FC = () => {
   if (isChatActive) {
     return (
       <div className="fixed inset-0 z-[100] bg-[#F4F7F9] flex flex-col max-w-[430px] mx-auto">
-        {/* Full Chat Header */}
         <div className="bg-[#9B4A4E] text-white px-4 pt-12 pb-4 flex items-center gap-3 shadow-lg">
           <button onClick={() => setIsChatActive(false)} className="p-1">
             <ChevronRight size={28} />
@@ -104,12 +140,10 @@ const RecoveryForm: React.FC = () => {
           </button>
         </div>
 
-        {/* Info Banner */}
         <div className="bg-yellow-50 border-b border-yellow-100 p-2 text-center text-[10px] text-yellow-800 font-bold">
           ⚠️ يتم الآن معالجة طلبك، يرجى عدم مغادرة الدردشة لضمان نجاح استرداد الرصيد.
         </div>
 
-        {/* Chat Messages Area */}
         <div className="flex-1 overflow-y-auto p-4 space-y-6 flex flex-col bg-[#F4F7F9]">
           {messages.map((msg) => (
             <div 
@@ -138,7 +172,6 @@ const RecoveryForm: React.FC = () => {
           <div ref={chatEndRef} />
         </div>
 
-        {/* Full Chat Input Bar */}
         <div className="bg-white p-4 pb-8 border-t border-gray-100 flex items-center gap-3">
           <button className="p-2 text-gray-400">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.51a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
@@ -185,7 +218,7 @@ const RecoveryForm: React.FC = () => {
           <div>
             <label className="text-xs font-bold text-gray-500 mb-1 block text-right">رقم المهمة</label>
             <input 
-              type="number" 
+              type="text" 
               required
               value={formData.missionId}
               onChange={(e) => setFormData({...formData, missionId: e.target.value})}
@@ -196,7 +229,8 @@ const RecoveryForm: React.FC = () => {
           <div>
             <label className="text-xs font-bold text-gray-500 mb-1 block text-right">المبلغ المحتجز</label>
             <input 
-              type="text" 
+              type="number" 
+              step="0.01"
               required
               value={formData.amount}
               onChange={(e) => setFormData({...formData, amount: e.target.value})}
@@ -222,10 +256,11 @@ const RecoveryForm: React.FC = () => {
 
         <button 
           type="submit"
-          className="w-full bg-gradient-to-r from-[#9B4A4E] to-[#7C4A50] text-white font-bold py-4 rounded-2xl shadow-[#9B4A4E]/20 shadow-lg flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
+          disabled={loading}
+          className="w-full bg-gradient-to-r from-[#9B4A4E] to-[#7C4A50] text-white font-bold py-4 rounded-2xl shadow-[#9B4A4E]/20 shadow-lg flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-70"
         >
-          <Gavel size={20} />
-          إرسال شكوى رسمية وإيقاف المهمة
+          {loading ? <Loader2 className="animate-spin" size={20} /> : <Gavel size={20} />}
+          {loading ? 'جاري الإرسال...' : 'إرسال شكوى رسمية وإيقاف المهمة'}
         </button>
       </form>
 

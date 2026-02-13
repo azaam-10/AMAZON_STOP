@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { ShieldAlert, Gavel, Send, Headphones, ChevronRight, MoreVertical, CheckCheck, Loader2, MessageSquareText, Clock } from 'lucide-react';
+import { ShieldAlert, Gavel, Send, Headphones, ChevronRight, MoreVertical, CheckCheck, Loader2, MessageSquareText, Clock, Camera, Image as ImageIcon, X } from 'lucide-react';
 import { supabase } from '../lib/supabase.ts';
 
 interface Message {
@@ -16,28 +16,30 @@ const RecoveryForm: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [userProfile, setUserProfile] = useState<any>(null);
+  const [selectedImage, setSelectedImage] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  
   const [formData, setFormData] = useState({
     link: '',
     missionId: '',
     amount: '',
     reason: 'تجميد الرصيد'
   });
+  
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // فحص الحالة عند التحميل لمعرفة ما إذا كان هناك طلب مسبق
   useEffect(() => {
     async function checkExistingStatus() {
       try {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
 
-        // جلب الملف الشخصي
         const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single();
         setUserProfile(profile);
 
-        // جلب آخر شكوى مقدمة
         const { data: complaint } = await supabase
           .from('complaints')
           .select('*')
@@ -58,6 +60,7 @@ const RecoveryForm: React.FC = () => {
 💰 **المبلغ المحتجز:** ${complaint.amount || '0.00'} USDT
 ⚠️ **سبب الشكوى:** ${complaint.reason}
 
+📸 [تم إرفاق صورة إثبات الحساب]
 --------------------------
 لقد تم تقديم هذا البلاغ سابقاً. جاري المتابعة من قبل قسم الشؤون القانونية والتقنية.
           `.trim();
@@ -86,30 +89,59 @@ const RecoveryForm: React.FC = () => {
     checkExistingStatus();
   }, []);
 
-  const scrollToBottom = () => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setSelectedImage(file);
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setImagePreview(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
-  useEffect(() => {
-    if (isChatActive) {
-      scrollToBottom();
-    }
-  }, [messages, isChatActive]);
+  const removeImage = () => {
+    setSelectedImage(null);
+    setImagePreview(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!selectedImage) {
+      alert("يرجى إرفاق صورة لإثبات الحساب أو لقطة شاشة للمهمة المتعثرة.");
+      return;
+    }
+    
     setIsSubmitting(true);
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("يجب تسجيل الدخول أولاً");
 
+      // 1. رفع الصورة إلى Storage
+      const fileExt = selectedImage.name.split('.').pop();
+      const fileName = `${user.id}-${Math.random()}.${fileExt}`;
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('complaints')
+        .upload(fileName, selectedImage);
+
+      if (uploadError) throw uploadError;
+
+      // الحصول على الرابط العام
+      const { data: { publicUrl } } = supabase.storage
+        .from('complaints')
+        .getPublicUrl(fileName);
+
+      // 2. حفظ البيانات في الجدول
       const { data, error } = await supabase.from('complaints').insert([{
         user_id: user.id,
         platform_link: formData.link,
         mission_id: formData.missionId,
         amount: parseFloat(formData.amount),
-        reason: formData.reason
+        reason: formData.reason,
+        screenshot_url: publicUrl
       }]).select().single();
 
       if (error) throw error;
@@ -125,32 +157,31 @@ const RecoveryForm: React.FC = () => {
 💰 **المبلغ المحتجز:** ${formData.amount || '0.00'} USDT
 ⚠️ **سبب الشكوى:** ${formData.reason}
 
+📸 [تم رفع صورة الإثبات بنجاح]
 --------------------------
 لقد قمت بتقديم هذا البلاغ رسمياً لمكتب فض النزاعات. أطلب التدخل الفوري لإيقاف المهمة برمجياً وفك تجميد الرصيد وإعادته للمحفظة.
     `.trim();
 
-      const newMsg: Message = {
+      setMessages([{
         id: data.id,
         text: initialMessage,
         sender: 'user',
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      };
-
-      setMessages([newMsg]);
+      }]);
+      
       setIsChatActive(true);
 
       setTimeout(() => {
-        const supportReply: Message = {
+        setMessages(prev => [...prev, {
           id: Date.now() + 1,
-          text: `تم استلام بلاغك بنجاح. رقم المعاملة: #${data.id}. جاري الآن فك تشفير المهمة ${formData.missionId} لاستعادة الرصيد.`,
+          text: `تم استلام بلاغك والصورة المرفقة بنجاح. رقم المعاملة: #${data.id}. وكيلك "ناصر" يراجع الآن لقطة الشاشة لبدء عملية فك التشفير.`,
           sender: 'support',
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        };
-        setMessages(prev => [...prev, supportReply]);
+        }]);
       }, 2000);
 
     } catch (err: any) {
-      alert("خطأ أثناء إرسال الشكوى: " + err.message);
+      alert("خطأ أثناء الإرسال: " + err.message);
     } finally {
       setIsSubmitting(false);
     }
@@ -177,7 +208,6 @@ const RecoveryForm: React.FC = () => {
     );
   }
 
-  // في حال كانت الدردشة نشطة (عرض كامل الشاشة)
   if (isChatActive) {
     return (
       <div className="fixed inset-0 z-[100] bg-[#F4F7F9] flex flex-col max-w-[430px] mx-auto animate-in slide-in-from-bottom duration-300">
@@ -258,23 +288,19 @@ const RecoveryForm: React.FC = () => {
     );
   }
 
-  // واجهة "فتح الدردشة" بدلاً من النموذج إذا وجد طلب سابق
   if (hasExistingComplaint) {
     return (
       <div className="bg-white rounded-3xl p-6 shadow-xl border border-gray-100 overflow-hidden relative group">
         <div className="absolute top-0 right-0 w-24 h-24 bg-[#9B4A4E]/5 rounded-bl-full -mr-8 -mt-8 transition-transform group-hover:scale-110"></div>
-        
         <div className="flex flex-col items-center text-center py-4">
           <div className="w-20 h-20 bg-green-50 rounded-full flex items-center justify-center mb-4 relative">
             <MessageSquareText size={40} className="text-green-600" />
             <div className="absolute top-1 right-1 w-5 h-5 bg-green-500 border-4 border-white rounded-full animate-pulse"></div>
           </div>
-          
           <h3 className="text-lg font-black text-gray-800 mb-2">لديك طلب استرداد نشط</h3>
           <p className="text-xs text-gray-500 mb-6 px-4 leading-relaxed">
             تم تسجيل بلاغك بنجاح وهو الآن قيد المتابعة القانونية. يمكنك التواصل مباشرة مع وكيلك لمتابعة حالة الرصيد.
           </p>
-
           <div className="grid grid-cols-2 gap-3 w-full mb-6">
             <div className="bg-gray-50 rounded-2xl p-3 border border-gray-100">
                <Clock className="mx-auto text-[#9B4A4E] mb-1" size={16} />
@@ -287,7 +313,6 @@ const RecoveryForm: React.FC = () => {
                <span className="text-[11px] font-bold text-gray-700">أولوية عالية</span>
             </div>
           </div>
-
           <button 
             onClick={() => setIsChatActive(true)}
             className="w-full bg-gradient-to-r from-[#9B4A4E] to-[#7C4A50] text-white font-bold py-4 rounded-2xl shadow-lg shadow-[#9B4A4E]/30 flex items-center justify-center gap-3 active:scale-[0.98] transition-all"
@@ -296,17 +321,10 @@ const RecoveryForm: React.FC = () => {
             فتح نافذة الدردشة المباشرة
           </button>
         </div>
-
-        <div className="mt-4 pt-4 border-t border-dashed border-gray-100 text-center">
-          <p className="text-[10px] text-gray-400 italic">
-            * لا يمكن تقديم طلب جديد حتى يتم الانتهاء من الطلب الحالي
-          </p>
-        </div>
       </div>
     );
   }
 
-  // واجهة النموذج الافتراضية
   return (
     <div className="bg-white rounded-3xl p-6 shadow-xl border border-gray-100">
       <form onSubmit={handleSubmit} className="space-y-4">
@@ -349,6 +367,43 @@ const RecoveryForm: React.FC = () => {
           </div>
         </div>
 
+        {/* حقل رفع الصورة الإجباري */}
+        <div>
+          <label className="text-xs font-bold text-gray-500 mb-1 block text-right">صورة إثبات الحساب / المهمة (إجباري)</label>
+          <div 
+            onClick={() => fileInputRef.current?.click()}
+            className={`w-full aspect-video rounded-2xl border-2 border-dashed flex flex-col items-center justify-center cursor-pointer transition-all overflow-hidden relative ${
+              imagePreview ? 'border-[#9B4A4E] bg-gray-50' : 'border-gray-200 bg-gray-50 hover:bg-gray-100'
+            }`}
+          >
+            {imagePreview ? (
+              <>
+                <img src={imagePreview} alt="Preview" className="w-full h-full object-cover" />
+                <button 
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); removeImage(); }}
+                  className="absolute top-2 right-2 bg-black/50 text-white p-1.5 rounded-full hover:bg-black/70"
+                >
+                  <X size={16} />
+                </button>
+              </>
+            ) : (
+              <div className="flex flex-col items-center text-gray-400">
+                <Camera size={32} className="mb-2" />
+                <p className="text-[10px] font-bold">اضغط هنا لالتقاط أو رفع لقطة الشاشة</p>
+                <p className="text-[8px] mt-1">يجب أن تظهر المهمة المتعثرة أو الرصيد المجمد</p>
+              </div>
+            )}
+          </div>
+          <input 
+            type="file" 
+            ref={fileInputRef}
+            onChange={handleImageChange}
+            accept="image/*"
+            className="hidden"
+          />
+        </div>
+
         <div>
           <label className="text-xs font-bold text-gray-500 mb-1 block text-right">سبب الشكوى</label>
           <select 
@@ -365,11 +420,11 @@ const RecoveryForm: React.FC = () => {
 
         <button 
           type="submit"
-          disabled={isSubmitting}
-          className="w-full bg-gradient-to-r from-[#9B4A4E] to-[#7C4A50] text-white font-bold py-4 rounded-2xl shadow-[#9B4A4E]/20 shadow-lg flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-70"
+          disabled={isSubmitting || !selectedImage}
+          className="w-full bg-gradient-to-r from-[#9B4A4E] to-[#7C4A50] text-white font-bold py-4 rounded-2xl shadow-[#9B4A4E]/20 shadow-lg flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:grayscale disabled:opacity-50"
         >
           {isSubmitting ? <Loader2 className="animate-spin" size={20} /> : <Gavel size={20} />}
-          {isSubmitting ? 'جاري إرسال البلاغ...' : 'إرسال شكوى رسمية وإيقاف المهمة'}
+          {isSubmitting ? 'جاري رفع البيانات والملفات...' : 'إرسال شكوى رسمية وإيقاف المهمة'}
         </button>
       </form>
 

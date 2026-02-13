@@ -5,7 +5,8 @@ import RecoveryForm from './components/RecoveryForm.tsx';
 import LiveStatus from './components/LiveStatus.tsx';
 import BottomNav from './components/BottomNav.tsx';
 import Auth from './components/Auth.tsx';
-import { supabase } from './lib/supabase.ts';
+import { supabase, isConfigured } from './lib/supabase.ts';
+import { AlertCircle, ExternalLink } from 'lucide-react';
 
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState('Home');
@@ -13,9 +14,13 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!isConfigured) {
+      setLoading(false);
+      return;
+    }
+
     const checkSession = async () => {
       try {
-        // Safe destructuring to handle potential null data
         const { data } = await supabase.auth.getSession();
         setSession(data?.session || null);
       } catch (err) {
@@ -28,13 +33,37 @@ const App: React.FC = () => {
 
     checkSession();
 
-    // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
     });
 
     return () => subscription.unsubscribe();
   }, []);
+
+  // واجهة عرض في حال عدم ضبط المفاتيح
+  if (!isConfigured) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#F4F7F9] p-6 text-center" dir="rtl">
+        <div className="bg-white p-8 rounded-[40px] shadow-2xl max-w-sm border border-orange-100">
+          <div className="w-16 h-16 bg-orange-100 text-orange-600 rounded-2xl flex items-center justify-center mx-auto mb-6">
+            <AlertCircle size={40} />
+          </div>
+          <h2 className="text-xl font-black text-gray-800 mb-4">بانتظار مفاتيح الربط!</h2>
+          <p className="text-gray-500 text-sm mb-6 leading-relaxed">
+            من فضلك قم بجلب <b>Project URL</b> و <b>Anon Key</b> من إعدادات Supabase ووضعهم في ملف <code>lib/supabase.ts</code> لكي يعمل النظام.
+          </p>
+          <a 
+            href="https://supabase.com/dashboard" 
+            target="_blank" 
+            className="flex items-center justify-center gap-2 w-full bg-[#9B4A4E] text-white font-bold py-4 rounded-2xl shadow-lg hover:bg-[#7C4A50] transition-all"
+          >
+            فتح لوحة تحكم Supabase
+            <ExternalLink size={18} />
+          </a>
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (

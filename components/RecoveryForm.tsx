@@ -14,7 +14,7 @@ interface Message {
 const RecoveryForm: React.FC = () => {
   const [isChatActive, setIsChatActive] = useState(false);
   const [hasExistingComplaint, setHasExistingComplaint] = useState(false);
-  const [currentComplaintId, setCurrentComplaintId] = useState<number | null>(null);
+  const [currentComplaintId, setCurrentComplaintId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isChatUploading, setIsChatUploading] = useState(false);
@@ -56,7 +56,7 @@ const RecoveryForm: React.FC = () => {
           setHasExistingComplaint(true);
           setCurrentComplaintId(complaint.id);
           
-          const { data: dbMsgs, error: msgErr } = await supabase
+          const { data: dbMsgs } = await supabase
             .from('complaint_messages')
             .select('*')
             .eq('complaint_id', complaint.id)
@@ -71,7 +71,6 @@ const RecoveryForm: React.FC = () => {
               time: formatTime(m.created_at)
             })));
           } else {
-            // fallback: إذا لم تكن هناك رسائل في الجدول، نعرض بيانات الطلب من جدول الشكاوي
             setMessages([
               {
                 id: 0,
@@ -81,7 +80,7 @@ const RecoveryForm: React.FC = () => {
               },
               {
                 id: 1,
-                text: `📋 تفاصيل الطلب:\nالرابط: ${complaint.platform_link}\nالمهمة: #${complaint.mission_id}\nالمبلغ: ${complaint.amount} USDT`,
+                text: `📋 تفاصيل الطلب المسجل:\nالرابط: ${complaint.platform_link}\nالمهمة: #${complaint.mission_id}\nالمبلغ: ${complaint.amount} USDT`,
                 sender: 'user',
                 time: formatTime(complaint.created_at)
               }
@@ -103,16 +102,6 @@ const RecoveryForm: React.FC = () => {
     }
   }, [messages, isChatActive]);
 
-  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setSelectedImage(file);
-      const reader = new FileReader();
-      reader.onloadend = () => setImagePreview(reader.result as string);
-      reader.readAsDataURL(file);
-    }
-  };
-
   const handleSendChatImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !currentComplaintId) return;
@@ -122,16 +111,14 @@ const RecoveryForm: React.FC = () => {
       const { data: { user } } = await supabase.auth.getUser();
       const fileName = `${user?.id}/${Date.now()}.jpg`;
       
-      // الرفع لمخزن chat_images
       const { error: upErr } = await supabase.storage
         .from('chat_images')
-        .upload(fileName, file, { upsert: true });
+        .upload(fileName, file);
 
-      if (upErr) throw new Error("فشل الرفع: " + upErr.message);
+      if (upErr) throw upErr;
 
       const { data: { publicUrl } } = supabase.storage.from('chat_images').getPublicUrl(fileName);
 
-      // حفظ في جدول الرسائل
       const { data: msgData, error: dbErr } = await supabase.from('complaint_messages').insert([{
         complaint_id: currentComplaintId,
         user_id: user?.id,
@@ -139,7 +126,7 @@ const RecoveryForm: React.FC = () => {
         sender: 'user'
       }]).select().single();
 
-      if (dbErr) throw new Error("فشل الحفظ في القاعدة: " + dbErr.message);
+      if (dbErr) throw dbErr;
 
       if (msgData) {
         setMessages(prev => [...prev, {
@@ -150,7 +137,7 @@ const RecoveryForm: React.FC = () => {
         }]);
       }
     } catch (err: any) {
-      alert(err.message || "حدث خطأ غير متوقع عند رفع الصورة");
+      alert("خطأ في الرفع: " + (err.message || "تأكد من إعدادات Storage"));
     } finally {
       setIsChatUploading(false);
       if (chatImageRef.current) chatImageRef.current.value = '';
@@ -159,20 +146,16 @@ const RecoveryForm: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedImage) return alert("يرجى إرفاق الصورة أولاً");
+    if (!selectedImage) return alert("يرجى إرفاق الصورة");
     setIsSubmitting(true);
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
       const fileName = `initial/${user?.id}-${Date.now()}.jpg`;
       
-      // رفع الصورة الأساسية
-      const { error: upErr } = await supabase.storage.from('complaints').upload(fileName, selectedImage);
-      if (upErr) throw upErr;
-      
+      await supabase.storage.from('complaints').upload(fileName, selectedImage);
       const { data: { publicUrl } } = supabase.storage.from('complaints').getPublicUrl(fileName);
 
-      // إنشاء الشكوى
       const { data: comp, error: compErr } = await supabase.from('complaints').insert([{
         user_id: user?.id,
         platform_link: formData.link,
@@ -184,20 +167,25 @@ const RecoveryForm: React.FC = () => {
 
       if (compErr) throw compErr;
 
-      // تحويل بيانات الشكوى لرسائل في جدول الدردشة فوراً لضمان ظهورها
-      const reportText = `📋 *تفاصيل الطلب:*\nالرابط: ${formData.link}\nالمهمة: #${formData.missionId}\nالمبلغ: ${formData.amount} USDT\nالسبب: ${formData.reason}`;
+      const reportText = `📋 *بلاغ جديد:*\nالمنصة: ${formData.link}\nالمهمة: #${formData.missionId}\nالمبلغ: ${formData.amount} USDT`;
       
-      const { data: msgs, error: msgsErr } = await supabase.from('complaint_messages').insert([
+      await supabase.from('complaint_messages').insert([
         { complaint_id: comp.id, user_id: user?.id, image_url: publicUrl, sender: 'user' },
         { complaint_id: comp.id, user_id: user?.id, text: reportText, sender: 'user' }
-      ]).select();
-
-      if (msgsErr) throw msgsErr;
+      ]);
 
       setCurrentComplaintId(comp.id);
       setHasExistingComplaint(true);
-      if (msgs) {
-        setMessages(msgs.map(m => ({
+      
+      // إعادة جلب الرسائل للتأكد من المزامنة
+      const { data: newMsgs } = await supabase
+        .from('complaint_messages')
+        .select('*')
+        .eq('complaint_id', comp.id)
+        .order('created_at', { ascending: true });
+
+      if (newMsgs) {
+        setMessages(newMsgs.map(m => ({
           id: m.id,
           text: m.text,
           imageUrl: m.image_url,
@@ -207,7 +195,7 @@ const RecoveryForm: React.FC = () => {
       }
       setIsChatActive(true);
     } catch (err: any) {
-      alert("فشل تقديم الطلب: " + (err.message || "خطأ مجهول"));
+      alert("خطأ: " + err.message);
     } finally {
       setIsSubmitting(false);
     }
@@ -248,15 +236,15 @@ const RecoveryForm: React.FC = () => {
 
   if (isChatActive) {
     return (
-      <div className="fixed inset-0 z-[100] bg-[#F4F7F9] flex flex-col max-w-[430px] mx-auto">
+      <div className="fixed inset-0 z-[100] bg-[#F4F7F9] flex flex-col max-w-[430px] mx-auto animate-in fade-in duration-300">
         <div className="bg-[#9B4A4E] text-white px-4 pt-12 pb-4 flex items-center gap-3 shadow-lg">
           <button onClick={() => setIsChatActive(false)} className="p-1"><ChevronRight size={28} /></button>
-          <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center overflow-hidden border border-white/20">
-             <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Naser" className="w-full h-full object-cover" />
+          <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center overflow-hidden border border-white/10">
+             <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Naser" className="w-full h-full" />
           </div>
           <div className="flex-1 text-right">
             <h2 className="text-sm font-bold">ناصر - مراجعة المرفقات</h2>
-            <p className="text-[9px] opacity-70">متصل الآن لمراجعة طلبك</p>
+            <p className="text-[9px] opacity-70">متصل الآن لمساعدتك</p>
           </div>
           <MoreVertical size={20} className="opacity-40" />
         </div>
@@ -266,14 +254,9 @@ const RecoveryForm: React.FC = () => {
             <div key={msg.id} className={`max-w-[85%] ${msg.sender === 'user' ? 'self-end' : 'self-start'}`}>
               <div className={`rounded-2xl overflow-hidden shadow-sm ${msg.sender === 'user' ? 'bg-[#9B4A4E] text-white rounded-tr-none' : 'bg-white text-gray-800 rounded-tl-none border border-gray-100'}`}>
                 {msg.imageUrl && (
-                  <img 
-                    src={msg.imageUrl} 
-                    className="w-full max-h-64 object-cover cursor-pointer" 
-                    onClick={() => window.open(msg.imageUrl, '_blank')} 
-                    onError={(e) => { e.currentTarget.src = "https://placehold.co/400x300?text=الصورة+غير+متوفرة"; }}
-                  />
+                  <img src={msg.imageUrl} className="w-full max-h-64 object-cover cursor-pointer" onClick={() => window.open(msg.imageUrl, '_blank')} />
                 )}
-                {msg.text && <div className="p-3 text-xs text-right whitespace-pre-wrap leading-relaxed">{msg.text}</div>}
+                {msg.text && <div className="p-3 text-[11px] text-right whitespace-pre-wrap leading-relaxed">{msg.text}</div>}
                 <div className={`px-3 pb-1 flex items-center gap-1 text-[8px] opacity-60 ${msg.sender === 'user' ? 'justify-start' : 'justify-end'}`}>
                   <span>{msg.time}</span>
                   {msg.sender === 'user' && <CheckCheck size={10} />}
@@ -284,7 +267,7 @@ const RecoveryForm: React.FC = () => {
           {isChatUploading && (
             <div className="self-end bg-white/50 border border-gray-100 p-2 rounded-xl flex items-center gap-2">
               <Loader2 className="animate-spin text-[#9B4A4E]" size={12} />
-              <span className="text-[9px] text-[#9B4A4E] font-bold">جاري إرسال الصورة...</span>
+              <span className="text-[9px] text-[#9B4A4E]">جاري إرسال الصورة...</span>
             </div>
           )}
           <div ref={chatEndRef} />
@@ -301,12 +284,12 @@ const RecoveryForm: React.FC = () => {
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-              placeholder="اكتب هنا..."
+              placeholder="اكتب رسالتك..."
               className="w-full bg-gray-50 rounded-full px-4 py-2.5 text-xs text-right border border-gray-100 outline-none focus:ring-1 focus:ring-[#9B4A4E]/20"
               dir="rtl"
             />
           </div>
-          <button onClick={handleSendMessage} className="bg-[#9B4A4E] text-white p-2.5 rounded-full shadow-lg shadow-[#9B4A4E]/20">
+          <button onClick={handleSendMessage} className="bg-[#9B4A4E] text-white p-2.5 rounded-full shadow-lg">
             <Send size={18} className="rotate-180" />
           </button>
         </div>
@@ -318,22 +301,18 @@ const RecoveryForm: React.FC = () => {
     <div className="bg-white rounded-3xl p-6 shadow-xl border border-gray-100">
       {hasExistingComplaint ? (
         <div className="flex flex-col items-center text-center py-4">
-          <div className="w-20 h-20 bg-green-50 rounded-full flex items-center justify-center mb-4">
-            <MessageSquareText size={36} className="text-green-600" />
-          </div>
-          <h3 className="font-bold text-gray-800">طلبك مسجل ونحن بانتظارك</h3>
-          <p className="text-[11px] text-gray-500 mt-2 mb-6 px-4">
-            لقد تم توثيق الطلب. يمكنك الآن متابعة المحادثة مع الوكيل "ناصر" وإرسال المزيد من الصور التوضيحية.
-          </p>
+          <div className="w-20 h-20 bg-green-50 rounded-full flex items-center justify-center mb-4"><MessageSquareText size={36} className="text-green-600" /></div>
+          <h3 className="font-bold text-gray-800">طلبك قيد المراجعة</h3>
+          <p className="text-[11px] text-gray-500 mt-2 mb-6 px-4">تم تسجيل كافة البيانات بنجاح. يمكنك الآن الدردشة مع ناصر لإرسال صور إضافية.</p>
           <button onClick={() => setIsChatActive(true)} className="w-full bg-[#9B4A4E] text-white font-bold py-4 rounded-2xl flex items-center justify-center gap-3 shadow-lg active:scale-95 transition-transform">
-            <Paperclip size={20} /> عرض المحادثة والمرفقات
+            <Paperclip size={20} /> عرض المرفقات والدردشة
           </button>
         </div>
       ) : (
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1">
              <label className="text-[10px] font-bold text-gray-400 block pr-2">رابط المنصة</label>
-             <input type="text" required placeholder="أدخل رابط الموقع" value={formData.link} onChange={e => setFormData({...formData, link: e.target.value})} className="w-full bg-gray-50 rounded-xl px-4 py-3 text-xs text-right border border-gray-100" />
+             <input type="text" required placeholder="https://..." value={formData.link} onChange={e => setFormData({...formData, link: e.target.value})} className="w-full bg-gray-50 rounded-xl px-4 py-3 text-xs text-right border border-gray-100" />
           </div>
           <div className="grid grid-cols-2 gap-3">
              <div className="space-y-1">
@@ -346,22 +325,23 @@ const RecoveryForm: React.FC = () => {
              </div>
           </div>
           <div className="space-y-1">
-             <label className="text-[10px] font-bold text-gray-400 block pr-2">إثبات الحساب (لقطة شاشة)</label>
-             <div onClick={() => fileInputRef.current?.click()} className="w-full aspect-video rounded-2xl border-2 border-dashed border-gray-200 flex flex-col items-center justify-center bg-gray-50 cursor-pointer overflow-hidden relative group">
-               {imagePreview ? (
-                 <img src={imagePreview} className="w-full h-full object-cover" />
-               ) : (
-                 <div className="text-center group-hover:scale-110 transition-transform">
-                   <Camera className="mx-auto text-gray-300 mb-2" />
-                   <p className="text-[9px] text-gray-400 font-bold">اضغط هنا لرفع الصورة</p>
-                 </div>
-               )}
+             <label className="text-[10px] font-bold text-gray-400 block pr-2">لقطة شاشة للمهمة (إثبات)</label>
+             <div onClick={() => fileInputRef.current?.click()} className="w-full aspect-video rounded-2xl border-2 border-dashed border-gray-200 flex flex-col items-center justify-center bg-gray-50 cursor-pointer overflow-hidden relative">
+               {imagePreview ? <img src={imagePreview} className="w-full h-full object-cover" /> : <div className="text-center"><Camera className="mx-auto text-gray-300 mb-2" /><p className="text-[9px] text-gray-400 font-bold">اضغط لإرفاق الصورة</p></div>}
              </div>
           </div>
-          <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleImageChange} />
+          <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) {
+              setSelectedImage(file);
+              const reader = new FileReader();
+              reader.onloadend = () => setImagePreview(reader.result as string);
+              reader.readAsDataURL(file);
+            }
+          }} />
           <button type="submit" disabled={isSubmitting || !selectedImage} className="w-full bg-[#9B4A4E] text-white font-bold py-4 rounded-2xl disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-all">
             {isSubmitting ? <Loader2 className="animate-spin" /> : <Gavel size={20} />}
-            {isSubmitting ? 'جاري الإرسال...' : 'بدء معالجة الشكوى'}
+            {isSubmitting ? 'جاري الإرسال...' : 'تقديم الشكوى'}
           </button>
         </form>
       )}

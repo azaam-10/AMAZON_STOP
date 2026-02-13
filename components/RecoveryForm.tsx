@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { ShieldAlert, Gavel, Send, Headphones, ChevronRight, MoreVertical, CheckCheck, Loader2 } from 'lucide-react';
+import { ShieldAlert, Gavel, Send, Headphones, ChevronRight, MoreVertical, CheckCheck, Loader2, MessageSquareText, Clock } from 'lucide-react';
 import { supabase } from '../lib/supabase.ts';
 
 interface Message {
@@ -12,7 +12,8 @@ interface Message {
 
 const RecoveryForm: React.FC = () => {
   const [isChatActive, setIsChatActive] = useState(false);
-  const [loading, setLoading] = useState(true); // نجعله true في البداية لفحص الحالة
+  const [hasExistingComplaint, setHasExistingComplaint] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [userProfile, setUserProfile] = useState<any>(null);
   const [formData, setFormData] = useState({
@@ -25,7 +26,7 @@ const RecoveryForm: React.FC = () => {
   const [inputValue, setInputValue] = useState('');
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  // فحص الحالة عند التحميل
+  // فحص الحالة عند التحميل لمعرفة ما إذا كان هناك طلب مسبق
   useEffect(() => {
     async function checkExistingStatus() {
       try {
@@ -37,7 +38,7 @@ const RecoveryForm: React.FC = () => {
         setUserProfile(profile);
 
         // جلب آخر شكوى مقدمة
-        const { data: complaint, error } = await supabase
+        const { data: complaint } = await supabase
           .from('complaints')
           .select('*')
           .eq('user_id', user.id)
@@ -46,7 +47,8 @@ const RecoveryForm: React.FC = () => {
           .maybeSingle();
 
         if (complaint) {
-          // بناء الرسالة الأولى من بيانات قاعدة البيانات
+          setHasExistingComplaint(true);
+          
           const restoredMessage = `
 🏛️ *بلاغ رسمي: طلب استرداد رصيد* 🏛️
 
@@ -74,7 +76,6 @@ const RecoveryForm: React.FC = () => {
               time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             }
           ]);
-          setIsChatActive(true);
         }
       } catch (err) {
         console.error("Error checking status:", err);
@@ -103,7 +104,6 @@ const RecoveryForm: React.FC = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("يجب تسجيل الدخول أولاً");
 
-      // 1. حفظ الشكوى في قاعدة البيانات
       const { data, error } = await supabase.from('complaints').insert([{
         user_id: user.id,
         platform_link: formData.link,
@@ -114,7 +114,8 @@ const RecoveryForm: React.FC = () => {
 
       if (error) throw error;
 
-      // 2. تفعيل واجهة الدردشة
+      setHasExistingComplaint(true);
+
       const initialMessage = `
 🏛️ *بلاغ رسمي: طلب استرداد رصيد* 🏛️
 
@@ -176,16 +177,17 @@ const RecoveryForm: React.FC = () => {
     );
   }
 
+  // في حال كانت الدردشة نشطة (عرض كامل الشاشة)
   if (isChatActive) {
     return (
-      <div className="fixed inset-0 z-[100] bg-[#F4F7F9] flex flex-col max-w-[430px] mx-auto">
+      <div className="fixed inset-0 z-[100] bg-[#F4F7F9] flex flex-col max-w-[430px] mx-auto animate-in slide-in-from-bottom duration-300">
         <div className="bg-[#9B4A4E] text-white px-4 pt-12 pb-4 flex items-center gap-3 shadow-lg">
-          <button onClick={() => setIsChatActive(false)} className="p-1">
+          <button onClick={() => setIsChatActive(false)} className="p-1 active:scale-90 transition-transform">
             <ChevronRight size={28} />
           </button>
           <div className="relative">
-            <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center border border-white/30">
-              <Headphones size={24} />
+            <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center border border-white/30 overflow-hidden">
+               <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Naser" alt="Support" className="w-full h-full object-cover" />
             </div>
             <div className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-green-500 border-2 border-[#9B4A4E] rounded-full"></div>
           </div>
@@ -256,6 +258,55 @@ const RecoveryForm: React.FC = () => {
     );
   }
 
+  // واجهة "فتح الدردشة" بدلاً من النموذج إذا وجد طلب سابق
+  if (hasExistingComplaint) {
+    return (
+      <div className="bg-white rounded-3xl p-6 shadow-xl border border-gray-100 overflow-hidden relative group">
+        <div className="absolute top-0 right-0 w-24 h-24 bg-[#9B4A4E]/5 rounded-bl-full -mr-8 -mt-8 transition-transform group-hover:scale-110"></div>
+        
+        <div className="flex flex-col items-center text-center py-4">
+          <div className="w-20 h-20 bg-green-50 rounded-full flex items-center justify-center mb-4 relative">
+            <MessageSquareText size={40} className="text-green-600" />
+            <div className="absolute top-1 right-1 w-5 h-5 bg-green-500 border-4 border-white rounded-full animate-pulse"></div>
+          </div>
+          
+          <h3 className="text-lg font-black text-gray-800 mb-2">لديك طلب استرداد نشط</h3>
+          <p className="text-xs text-gray-500 mb-6 px-4 leading-relaxed">
+            تم تسجيل بلاغك بنجاح وهو الآن قيد المتابعة القانونية. يمكنك التواصل مباشرة مع وكيلك لمتابعة حالة الرصيد.
+          </p>
+
+          <div className="grid grid-cols-2 gap-3 w-full mb-6">
+            <div className="bg-gray-50 rounded-2xl p-3 border border-gray-100">
+               <Clock className="mx-auto text-[#9B4A4E] mb-1" size={16} />
+               <span className="text-[10px] text-gray-400 block">حالة الطلب</span>
+               <span className="text-[11px] font-bold text-gray-700">قيد المعالجة</span>
+            </div>
+            <div className="bg-gray-50 rounded-2xl p-3 border border-gray-100">
+               <ShieldAlert className="mx-auto text-[#9B4A4E] mb-1" size={16} />
+               <span className="text-[10px] text-gray-400 block">المستوى</span>
+               <span className="text-[11px] font-bold text-gray-700">أولوية عالية</span>
+            </div>
+          </div>
+
+          <button 
+            onClick={() => setIsChatActive(true)}
+            className="w-full bg-gradient-to-r from-[#9B4A4E] to-[#7C4A50] text-white font-bold py-4 rounded-2xl shadow-lg shadow-[#9B4A4E]/30 flex items-center justify-center gap-3 active:scale-[0.98] transition-all"
+          >
+            <Headphones size={20} />
+            فتح نافذة الدردشة المباشرة
+          </button>
+        </div>
+
+        <div className="mt-4 pt-4 border-t border-dashed border-gray-100 text-center">
+          <p className="text-[10px] text-gray-400 italic">
+            * لا يمكن تقديم طلب جديد حتى يتم الانتهاء من الطلب الحالي
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // واجهة النموذج الافتراضية
   return (
     <div className="bg-white rounded-3xl p-6 shadow-xl border border-gray-100">
       <form onSubmit={handleSubmit} className="space-y-4">

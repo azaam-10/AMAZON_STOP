@@ -26,12 +26,27 @@ const RecoveryForm: React.FC = () => {
   const [inputValue, setInputValue] = useState('');
   
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<Message[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatImageRef = useRef<HTMLInputElement>(null);
 
   const formatTime = (date: string | Date) => new Date(date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-  // التحقق من وجود شكوى سابقة وجلب الرسائل
+  // مزامنة المرجع
+  useEffect(() => {
+    messagesRef.current = messages;
+    if (isChatActive) {
+      scrollToBottom();
+    }
+  }, [messages, isChatActive]);
+
+  const scrollToBottom = () => {
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
+
+  // التحقق الأولي
   useEffect(() => {
     async function checkStatus() {
       try {
@@ -57,13 +72,15 @@ const RecoveryForm: React.FC = () => {
             .order('created_at', { ascending: true });
             
           if (dbMsgs) {
-            setMessages(dbMsgs.map(m => ({ 
+            const mapped = dbMsgs.map(m => ({ 
               id: m.id, 
               text: m.text, 
               imageUrl: m.image_url, 
               sender: m.sender, 
               time: formatTime(m.created_at) 
-            })));
+            }));
+            setMessages(mapped);
+            messagesRef.current = mapped;
           }
         }
       } catch (e) {
@@ -75,11 +92,11 @@ const RecoveryForm: React.FC = () => {
     checkStatus();
   }, []);
 
-  // المزامنة الفورية للعميل (Real-time)
+  // المزامنة الفورية (Real-time) للعميل
   useEffect(() => {
     if (!currentComplaintId) return;
 
-    const channel = supabase.channel(`whatsapp_user_${currentComplaintId}`)
+    const channel = supabase.channel(`whatsapp_client_v3_${currentComplaintId}`)
       .on('postgres_changes', { 
         event: 'INSERT', 
         schema: 'public', 
@@ -87,53 +104,71 @@ const RecoveryForm: React.FC = () => {
         filter: `complaint_id=eq.${currentComplaintId}` 
       }, (payload) => {
         const newMsg = payload.new;
-        setMessages(prev => {
-          if (prev.find(m => m.id === newMsg.id)) return prev;
-          return [...prev, {
+        
+        // التحقق من عدم التكرار
+        const exists = messagesRef.current.some(m => String(m.id) === String(newMsg.id));
+        if (!exists) {
+          const mappedMsg: Message = {
             id: newMsg.id,
             text: newMsg.text,
             imageUrl: newMsg.image_url,
             sender: newMsg.sender,
             time: formatTime(newMsg.created_at)
-          }];
-        });
-        // تمرير لأسفل عند وصول رسالة جديدة
-        setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+          };
+          setMessages(prev => [...prev, mappedMsg]);
+        }
       })
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') console.log('Client Realtime: Connected');
+      });
 
     return () => {
       supabase.removeChannel(channel);
     };
   }, [currentComplaintId]);
 
-  // التمرير التلقائي عند فتح الدردشة أو تغير الرسائل
-  useEffect(() => {
-    if (isChatActive) {
-      chatEndRef.current?.scrollIntoView({ behavior: 'auto' });
-    }
-  }, [messages, isChatActive]);
-
   const handleSendMessage = async () => {
     if (!inputValue.trim() || !currentComplaintId) return;
     const text = inputValue;
+    const now = new Date();
     setInputValue('');
     
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      const { error } = await supabase.from('complaint_messages').insert([{ 
+      // تحديث متفائل (Optimistic Update)
+      const tempId = `temp-${Date.now()}`;
+      const optimisticMsg: Message = {
+        id: tempId,
+        text: text,
+        sender: 'user',
+        time: formatTime(now)
+      };
+      setMessages(prev => [...prev, optimisticMsg]);
+
+      const { data: sentMsg, error } = await supabase.from('complaint_messages').insert([{ 
         complaint_id: currentComplaintId, 
         user_id: user.id, 
         text: text, 
         sender: 'user' 
-      }]);
+      }]).select().single();
       
       if (error) throw error;
+      
+      // تحديث المعرف المؤقت
+      setMessages(prev => prev.map(m => m.id === tempId ? {
+        id: sentMsg.id,
+        text: sentMsg.text,
+        imageUrl: sentMsg.image_url,
+        sender: sentMsg.sender,
+        time: formatTime(sentMsg.created_at)
+      } : m));
+
     } catch (e) {
       console.error(e);
       setInputValue(text);
+      setMessages(prev => prev.filter(m => !String(m.id).startsWith('temp-')));
     }
   };
 
@@ -155,6 +190,7 @@ const RecoveryForm: React.FC = () => {
         image_url: publicUrl, 
         sender: 'user' 
       }]);
+      // سيتم التحديث التلقائي عبر Real-time
     } catch (e) {
       console.error(e);
     } finally { 
@@ -207,7 +243,7 @@ const RecoveryForm: React.FC = () => {
 
   if (isChatActive) {
     return (
-      <div className="fixed inset-0 z-[100] bg-[#F4F7F9] flex flex-col max-w-[430px] mx-auto">
+      <div className="fixed inset-0 z-[100] bg-[#F4F7F9] flex flex-col max-w-[430px] mx-auto animate-in fade-in duration-200">
         <div className="bg-[#9B4A4E] text-white px-4 pt-12 pb-4 flex items-center gap-3 shadow-lg">
           <button onClick={() => setIsChatActive(false)}><ChevronRight size={28} /></button>
           <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center overflow-hidden border border-white/10 shadow-inner">
@@ -220,11 +256,11 @@ const RecoveryForm: React.FC = () => {
           <MoreVertical size={20} className="opacity-40" />
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-4 flex flex-col">
+        <div className="flex-1 overflow-y-auto p-4 space-y-4 flex flex-col bg-[#e5ddd5]">
           {messages.map((msg) => (
             <div key={msg.id} className={`max-w-[85%] ${msg.sender === 'user' ? 'self-end' : 'self-start'}`}>
-              <div className={`rounded-2xl overflow-hidden shadow-sm ${msg.sender === 'user' ? 'bg-[#9B4A4E] text-white rounded-tr-none' : 'bg-white text-gray-800 rounded-tl-none border border-gray-100'}`}>
-                {msg.imageUrl && <img src={msg.imageUrl} className="w-full max-h-64 object-cover" />}
+              <div className={`rounded-2xl overflow-hidden shadow-sm ${msg.sender === 'user' ? 'bg-[#dcf8c6] text-gray-800 rounded-tr-none border border-black/5' : 'bg-white text-gray-800 rounded-tl-none border border-gray-200'}`}>
+                {msg.imageUrl && <img src={msg.imageUrl} className="w-full max-h-64 object-cover cursor-pointer" onClick={() => window.open(msg.imageUrl, '_blank')} />}
                 {msg.text && <div className="p-3 text-[11px] text-right whitespace-pre-wrap leading-relaxed font-medium">{msg.text}</div>}
                 <div className={`px-3 pb-1.5 flex items-center gap-1 text-[8px] opacity-60 ${msg.sender === 'user' ? 'justify-start' : 'justify-end'}`}>
                   <span>{msg.time}</span>
@@ -233,14 +269,14 @@ const RecoveryForm: React.FC = () => {
               </div>
             </div>
           ))}
-          {isChatUploading && <div className="self-end text-[9px] text-[#9B4A4E] animate-pulse">جاري إرسال الصورة...</div>}
+          {isChatUploading && <div className="self-end text-[9px] text-[#9B4A4E] animate-pulse">جاري إرسال المرفق...</div>}
           <div ref={chatEndRef} />
         </div>
 
         <div className="bg-white p-4 pb-8 border-t flex items-center gap-3 shadow-inner">
           <button onClick={() => chatImageRef.current?.click()} className="p-2 text-gray-400 hover:text-[#9B4A4E]"><ImageIcon size={22} /></button>
           <input type="file" ref={chatImageRef} className="hidden" accept="image/*" onChange={handleChatImage} />
-          <input type="text" value={inputValue} onChange={(e) => setInputValue(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} placeholder="اكتب رسالتك..." className="flex-1 bg-gray-50 rounded-full px-4 py-3 text-xs text-right border-none outline-none focus:ring-1 focus:ring-[#9B4A4E]/20 transition-all" dir="rtl" />
+          <input type="text" value={inputValue} onChange={(e) => setInputValue(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} placeholder="اكتب رسالتك..." className="flex-1 bg-gray-50 rounded-full px-4 py-3 text-xs text-right border-none outline-none focus:ring-1 focus:ring-[#9B4A4E]/20" dir="rtl" />
           <button onClick={handleSendMessage} className="bg-[#9B4A4E] text-white p-3 rounded-full shadow-lg active:scale-90 transition-all"><Send size={18} className="rotate-180" /></button>
         </div>
       </div>
@@ -253,7 +289,7 @@ const RecoveryForm: React.FC = () => {
         <div className="flex flex-col items-center text-center py-4">
           <div className="w-20 h-20 bg-green-50 rounded-full flex items-center justify-center mb-4"><MessageSquareText size={36} className="text-green-600" /></div>
           <h3 className="font-bold text-gray-800">طلبك قيد المراجعة الفورية</h3>
-          <p className="text-[11px] text-gray-500 mt-2 mb-6 px-4">تم تسجيل بياناتك بنجاح. تواصل مع الوكيل ناصر لمتابعة استرداد أموالك.</p>
+          <p className="text-[11px] text-gray-500 mt-2 mb-6 px-4">تم تسجيل بياناتك. تواصل مع الوكيل ناصر لمتابعة الاسترداد.</p>
           <button onClick={() => setIsChatActive(true)} className="w-full bg-[#9B4A4E] text-white font-bold py-4 rounded-2xl flex items-center justify-center gap-3 shadow-lg active:scale-95 transition-transform">
             <Paperclip size={20} /> عرض المرفقات والدردشة المباشرة
           </button>

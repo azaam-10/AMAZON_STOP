@@ -29,14 +29,29 @@ const AdminDashboard: React.FC = () => {
   
   const chatEndRef = useRef<HTMLDivElement>(null);
   const selectedIdRef = useRef<string | null>(null);
+  const messagesRef = useRef<any[]>([]);
 
-  // تحديث مرجع المعرف المختار لتجنب Stale Closures في الـ Callbacks
+  // مزامنة المراجع لضمان الوصول للقيم الأحدث داخل ردود فعل Realtime
   useEffect(() => {
     selectedIdRef.current = selectedId;
     if (selectedId) {
       loadMessages(selectedId);
+    } else {
+      setMessages([]);
+      messagesRef.current = [];
     }
   }, [selectedId]);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+    scrollToBottom();
+  }, [messages]);
+
+  const scrollToBottom = () => {
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
 
   const loadMessages = async (id: string) => {
     const { data } = await supabase
@@ -44,7 +59,10 @@ const AdminDashboard: React.FC = () => {
       .select('*')
       .eq('complaint_id', id)
       .order('created_at', { ascending: true });
-    if (data) setMessages(data);
+    if (data) {
+      setMessages(data);
+      messagesRef.current = data;
+    }
   };
 
   const fetchComplaints = async () => {
@@ -80,17 +98,17 @@ const AdminDashboard: React.FC = () => {
       setComplaints(processed);
     } catch (err: any) {
       console.error("Fetch Error:", err);
-      setError("خطأ في الاتصال. يرجى التنشيط.");
+      setError("خطأ في جلب البيانات.");
     } finally {
       setLoading(false);
     }
   };
 
-  // الاشتراك الفوري العالمي (Real-time)
+  // المزامنة الفورية (Real-time) - واتساب بروتوكول
   useEffect(() => {
     fetchComplaints();
 
-    const channel = supabase.channel('whatsapp_admin_sync')
+    const channel = supabase.channel('whatsapp_admin_v3')
       .on('postgres_changes', { 
         event: 'INSERT', 
         schema: 'public', 
@@ -98,10 +116,14 @@ const AdminDashboard: React.FC = () => {
       }, (payload) => {
         const newMsg = payload.new;
         
-        // 1. تحديث قائمة الدردشات فوراً (نقل للأعلى)
+        // 1. تحديث ترتيب القائمة (تصدر المحادثة النشطة)
         setComplaints(prev => {
           const index = prev.findIndex(c => c.id === newMsg.complaint_id);
-          if (index === -1) return prev;
+          if (index === -1) {
+            // إذا كانت الشكوى غير موجودة، نقوم بجلب الكل مجدداً لضمان التحديث
+            fetchComplaints();
+            return prev;
+          }
           
           const updated = [...prev];
           const item = { ...updated[index], last_activity: newMsg.created_at };
@@ -110,14 +132,13 @@ const AdminDashboard: React.FC = () => {
           return updated;
         });
 
-        // 2. تحديث نافذة الدردشة المفتوحة فوراً
+        // 2. تحديث الرسائل في المحادثة المفتوحة (لحظياً)
         if (selectedIdRef.current === newMsg.complaint_id) {
-          setMessages(prev => {
-            if (prev.find(m => m.id === newMsg.id)) return prev;
-            return [...prev, newMsg];
-          });
-          // تمرير لأسفل تلقائي
-          setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+          // التحقق من عدم التكرار باستخدام المعرف (ID)
+          const exists = messagesRef.current.some(m => String(m.id) === String(newMsg.id));
+          if (!exists) {
+            setMessages(prev => [...prev, newMsg]);
+          }
         }
       })
       .on('postgres_changes', { 
@@ -127,16 +148,14 @@ const AdminDashboard: React.FC = () => {
       }, () => {
         fetchComplaints();
       })
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') console.log('Admin Realtime: Connected');
+      });
 
     return () => {
       supabase.removeChannel(channel);
     };
   }, []);
-
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'auto' });
-  }, [messages]);
 
   const handleSendMessage = async () => {
     if (!inputValue.trim() || !selectedId) return;
@@ -147,17 +166,36 @@ const AdminDashboard: React.FC = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      const { error: sendError } = await supabase.from('complaint_messages').insert([{
+      // تحديث متفائل للواجهة (Optimistic UI) لضمان السرعة الفائقة
+      const tempId = `temp-${Date.now()}`;
+      const optimisticMsg = {
+        id: tempId,
+        complaint_id: selectedId,
+        user_id: user.id,
+        text: text,
+        sender: 'support',
+        created_at: new Date().toISOString()
+      };
+      
+      setMessages(prev => [...prev, optimisticMsg]);
+
+      const { data: sentMsg, error: sendError } = await supabase.from('complaint_messages').insert([{
         complaint_id: selectedId,
         user_id: user.id,
         text: text,
         sender: 'support'
-      }]);
+      }]).select().single();
       
       if (sendError) throw sendError;
+
+      // استبدال الرسالة المؤقتة بالرسالة الحقيقية
+      setMessages(prev => prev.map(m => m.id === tempId ? sentMsg : m));
+      
     } catch (err: any) {
       console.error("Send Error:", err);
       setInputValue(text);
+      setMessages(prev => prev.filter(m => !String(m.id).startsWith('temp-')));
+      alert("فشل الإرسال، حاول مجدداً.");
     }
   };
 
@@ -176,7 +214,7 @@ const AdminDashboard: React.FC = () => {
     return (
       <div className="flex flex-col items-center justify-center p-24 gap-4">
         <Loader2 className="animate-spin text-[#9B4A4E]" size={40} />
-        <p className="text-gray-400 text-[10px] font-black tracking-widest">مزامنة فورية للمحادثات...</p>
+        <p className="text-gray-400 text-[10px] font-black tracking-widest">تنشيط المزامنة المباشرة...</p>
       </div>
     );
   }
@@ -184,7 +222,7 @@ const AdminDashboard: React.FC = () => {
   if (selectedId) {
     const comp = complaints.find(c => c.id === selectedId);
     return (
-      <div className="fixed inset-0 z-[110] bg-[#F8FAFC] flex flex-col max-w-[430px] mx-auto animate-in slide-in-from-left duration-300">
+      <div className="fixed inset-0 z-[110] bg-[#F8FAFC] flex flex-col max-w-[430px] mx-auto animate-in slide-in-from-left duration-200">
         <div className="bg-[#9B4A4E] text-white px-4 pt-12 pb-4 flex items-center gap-3 shadow-xl z-30">
           <button onClick={() => setSelectedId(null)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
             <ChevronLeft size={24} />
@@ -198,38 +236,28 @@ const AdminDashboard: React.FC = () => {
           </div>
         </div>
         
-        <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-32">
+        <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-32 bg-[#e5ddd5]">
           <div className="bg-white p-4 rounded-3xl border border-[#9B4A4E]/20 shadow-md text-right sticky top-0 z-20">
              <div className="flex items-center gap-2 mb-3 text-[#9B4A4E] font-bold text-[10px] border-b border-gray-50 pb-2">
                 <Pin size={14} className="rotate-45" /> البيانات الأصلية للطلب
              </div>
-             <div className="grid grid-cols-2 gap-3 mb-3">
+             <div className="grid grid-cols-2 gap-3 mb-3 text-right">
                <div className="bg-gray-50 p-3 rounded-2xl border border-gray-100/50">
-                 <p className="text-gray-400 text-[8px] mb-1 font-bold">المبلغ المطلوب</p>
+                 <p className="text-gray-400 text-[8px] mb-1 font-bold">المبلغ</p>
                  <p className="text-red-600 font-black text-xs">{comp?.amount} USDT</p>
                </div>
                <div className="bg-gray-50 p-3 rounded-2xl border border-gray-100/50">
-                 <p className="text-gray-400 text-[8px] mb-1 font-bold">رقم المهمة</p>
+                 <p className="text-gray-400 text-[8px] mb-1 font-bold">المهمة</p>
                  <p className="text-gray-800 font-bold text-xs">#{comp?.mission_id}</p>
                </div>
-             </div>
-             <div className="bg-blue-50/50 p-2.5 rounded-xl border border-blue-100/30 flex items-center justify-between">
-                <p className="text-[9px] text-blue-600 truncate underline flex-1 ml-2">{comp?.platform_link}</p>
-                <ExternalLink size={12} className="text-blue-400" />
              </div>
           </div>
 
           {messages.map((m) => (
             <div key={m.id} className={`max-w-[85%] flex flex-col ${m.sender === 'support' ? 'self-end' : 'self-start'}`}>
-               <div className={`rounded-2xl overflow-hidden shadow-sm ${m.sender === 'support' ? 'bg-[#9B4A4E] text-white rounded-tr-none' : 'bg-white text-gray-800 rounded-tl-none border border-gray-100'}`}>
+               <div className={`rounded-2xl overflow-hidden shadow-sm ${m.sender === 'support' ? 'bg-[#dcf8c6] text-gray-800 rounded-tr-none border border-black/5' : 'bg-white text-gray-800 rounded-tl-none border border-gray-200'}`}>
                  {m.image_url && (
-                   <div className="relative group">
-                     <img 
-                       src={m.image_url} 
-                       className="w-full max-h-96 object-contain bg-black/5 cursor-pointer" 
-                       onClick={() => window.open(m.image_url, '_blank')} 
-                     />
-                   </div>
+                   <img src={m.image_url} className="w-full max-h-96 object-contain bg-black/5 cursor-pointer" onClick={() => window.open(m.image_url, '_blank')} />
                  )}
                  {m.text && <div className="p-3 text-[11px] text-right whitespace-pre-wrap leading-relaxed font-medium">{m.text}</div>}
                  <div className={`px-3 pb-1.5 flex items-center gap-1 text-[8px] ${m.sender === 'support' ? 'justify-start opacity-60' : 'justify-end opacity-40'}`}>
@@ -249,7 +277,7 @@ const AdminDashboard: React.FC = () => {
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
             placeholder="اكتب رد المسؤول..."
-            className="flex-1 bg-gray-50 rounded-full px-5 py-4 text-xs text-right border border-gray-100 outline-none focus:border-[#9B4A4E] transition-all shadow-inner"
+            className="flex-1 bg-gray-50 rounded-full px-5 py-4 text-xs text-right border border-gray-100 outline-none focus:border-[#9B4A4E] transition-all"
             dir="rtl"
           />
           <button onClick={handleSendMessage} className="bg-[#9B4A4E] text-white p-4 rounded-full shadow-lg active:scale-90 transition-transform">
@@ -263,14 +291,14 @@ const AdminDashboard: React.FC = () => {
   return (
     <div className="space-y-4 py-2 animate-in fade-in duration-500">
       <div className="bg-white rounded-[32px] p-6 shadow-sm border border-gray-100 mb-6 mx-1">
-         <div className="flex items-center justify-between mb-6">
-            <button onClick={fetchComplaints} className="p-2 text-gray-300 hover:text-[#9B4A4E] transition-all active:rotate-180">
+         <div className="flex items-center justify-between mb-6 text-right">
+            <button onClick={fetchComplaints} className="p-2 text-gray-300 hover:text-[#9B4A4E]">
               <RefreshCcw size={18} className={loading ? 'animate-spin text-[#9B4A4E]' : ''} />
             </button>
-            <div className="text-right">
+            <div>
               <h2 className="font-black text-gray-800 text-lg">لوحة الرصد الفوري</h2>
               <div className="flex items-center gap-1 justify-end mt-1">
-                 <span className="text-[10px] text-green-500 font-black">وضع المزامنة نَشط</span>
+                 <span className="text-[10px] text-green-500 font-black">المزامنة نَشطة</span>
                  <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse shadow-[0_0_5px_green]"></div>
               </div>
             </div>
@@ -290,11 +318,9 @@ const AdminDashboard: React.FC = () => {
 
       <div className="space-y-3 px-1 pb-32">
         {filteredComplaints.length === 0 && !loading ? (
-          <div className="text-center py-24 flex flex-col items-center gap-4">
-            <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center text-gray-200">
-              <MessageSquare size={40} />
-            </div>
-            <p className="text-gray-500 text-xs font-black">لا توجد سجلات حالياً</p>
+          <div className="text-center py-24 flex flex-col items-center gap-4 text-gray-400">
+            <MessageSquare size={40} />
+            <p className="text-xs font-black">لا توجد محادثات نشطة</p>
           </div>
         ) : (
           filteredComplaints.map(c => {
@@ -303,15 +329,15 @@ const AdminDashboard: React.FC = () => {
               <button 
                 key={c.id} 
                 onClick={() => setSelectedId(c.id)}
-                className={`w-full bg-white p-5 rounded-[28px] flex items-center gap-4 border shadow-sm active:scale-[0.98] transition-all text-right hover:border-[#9B4A4E]/30 group relative overflow-hidden ${isJustActive ? 'border-[#9B4A4E]/30 ring-1 ring-[#9B4A4E]/5 shadow-md' : 'border-gray-50'}`}
+                className={`w-full bg-white p-5 rounded-[28px] flex items-center gap-4 border shadow-sm active:scale-[0.98] transition-all text-right hover:border-[#9B4A4E]/30 relative overflow-hidden ${isJustActive ? 'border-[#9B4A4E]/30 ring-1 ring-[#9B4A4E]/5 shadow-md' : 'border-gray-50'}`}
               >
                 {isJustActive && (
                   <div className="absolute top-0 right-0 p-1.5 bg-[#9B4A4E] text-white rounded-bl-xl shadow-md flex items-center gap-1">
                      <Sparkles size={10} />
-                     <span className="text-[7px] font-black">نشط الآن</span>
+                     <span className="text-[7px] font-black">جديد</span>
                   </div>
                 )}
-                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-inner transition-all ${isJustActive ? 'bg-[#9B4A4E]/10 text-[#9B4A4E]' : 'bg-gray-50 text-gray-400 group-hover:bg-[#9B4A4E]/5'}`}>
+                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center transition-all ${isJustActive ? 'bg-[#9B4A4E]/10 text-[#9B4A4E]' : 'bg-gray-50 text-gray-400'}`}>
                   <User size={28} strokeWidth={1.5} />
                 </div>
                 <div className="flex-1 min-w-0">
@@ -330,7 +356,7 @@ const AdminDashboard: React.FC = () => {
                     </p>
                   </div>
                 </div>
-                <ChevronLeft size={16} className="text-gray-200 group-hover:text-[#9B4A4E]" />
+                <ChevronLeft size={16} className="text-gray-200" />
               </button>
             );
           })

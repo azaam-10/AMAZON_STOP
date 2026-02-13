@@ -46,6 +46,34 @@ const RecoveryForm: React.FC = () => {
     }
   };
 
+  const loadMessages = async (id: string) => {
+    try {
+      const { data: dbMsgs } = await supabase
+        .from('complaint_messages')
+        .select('*')
+        .eq('complaint_id', id)
+        .order('created_at', { ascending: true });
+        
+      if (dbMsgs) {
+        const mapped = dbMsgs.map(m => ({ 
+          id: m.id, 
+          text: m.text, 
+          imageUrl: m.image_url, 
+          sender: m.sender, 
+          time: formatTime(m.created_at) 
+        }));
+        
+        // تحديث الحالة فقط إذا كانت البيانات مختلفة لتقليل إعادة الرندرة غير الضرورية
+        if (JSON.stringify(mapped) !== JSON.stringify(messagesRef.current)) {
+          setMessages(mapped);
+          messagesRef.current = mapped;
+        }
+      }
+    } catch (e) {
+      console.error("Polling error:", e);
+    }
+  };
+
   // التحقق الأولي
   useEffect(() => {
     async function checkStatus() {
@@ -64,24 +92,7 @@ const RecoveryForm: React.FC = () => {
         if (complaint) {
           setHasExistingComplaint(true);
           setCurrentComplaintId(complaint.id);
-          
-          const { data: dbMsgs } = await supabase
-            .from('complaint_messages')
-            .select('*')
-            .eq('complaint_id', complaint.id)
-            .order('created_at', { ascending: true });
-            
-          if (dbMsgs) {
-            const mapped = dbMsgs.map(m => ({ 
-              id: m.id, 
-              text: m.text, 
-              imageUrl: m.image_url, 
-              sender: m.sender, 
-              time: formatTime(m.created_at) 
-            }));
-            setMessages(mapped);
-            messagesRef.current = mapped;
-          }
+          await loadMessages(complaint.id);
         }
       } catch (e) {
         console.error(e);
@@ -92,11 +103,12 @@ const RecoveryForm: React.FC = () => {
     checkStatus();
   }, []);
 
-  // المزامنة الفورية (Real-time) للعميل
+  // نظام التحديث التلقائي (Polling) كل ثانية + Real-time
   useEffect(() => {
     if (!currentComplaintId) return;
 
-    const channel = supabase.channel(`whatsapp_client_v3_${currentComplaintId}`)
+    // اشتراك Real-time
+    const channel = supabase.channel(`whatsapp_client_v4_${currentComplaintId}`)
       .on('postgres_changes', { 
         event: 'INSERT', 
         schema: 'public', 
@@ -104,8 +116,6 @@ const RecoveryForm: React.FC = () => {
         filter: `complaint_id=eq.${currentComplaintId}` 
       }, (payload) => {
         const newMsg = payload.new;
-        
-        // التحقق من عدم التكرار
         const exists = messagesRef.current.some(m => String(m.id) === String(newMsg.id));
         if (!exists) {
           const mappedMsg: Message = {
@@ -118,12 +128,16 @@ const RecoveryForm: React.FC = () => {
           setMessages(prev => [...prev, mappedMsg]);
         }
       })
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') console.log('Client Realtime: Connected');
-      });
+      .subscribe();
+
+    // تحديث تلقائي (Polling) كل ثانية لضمان استقرار واتساب ستايل
+    const interval = setInterval(() => {
+      loadMessages(currentComplaintId);
+    }, 1000);
 
     return () => {
       supabase.removeChannel(channel);
+      clearInterval(interval);
     };
   }, [currentComplaintId]);
 
@@ -137,7 +151,6 @@ const RecoveryForm: React.FC = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      // تحديث متفائل (Optimistic Update)
       const tempId = `temp-${Date.now()}`;
       const optimisticMsg: Message = {
         id: tempId,
@@ -156,7 +169,6 @@ const RecoveryForm: React.FC = () => {
       
       if (error) throw error;
       
-      // تحديث المعرف المؤقت
       setMessages(prev => prev.map(m => m.id === tempId ? {
         id: sentMsg.id,
         text: sentMsg.text,
@@ -190,7 +202,6 @@ const RecoveryForm: React.FC = () => {
         image_url: publicUrl, 
         sender: 'user' 
       }]);
-      // سيتم التحديث التلقائي عبر Real-time
     } catch (e) {
       console.error(e);
     } finally { 
@@ -230,6 +241,7 @@ const RecoveryForm: React.FC = () => {
         
         setCurrentComplaintId(comp.id);
         setHasExistingComplaint(true);
+        setIsChatActive(true); // دخول تلقائي للمحادثة فور الإرسال
       }
     } catch (e) {
       console.error(e);
@@ -251,7 +263,7 @@ const RecoveryForm: React.FC = () => {
           </div>
           <div className="flex-1 text-right">
             <h2 className="text-sm font-bold">ناصر - مراجعة المرفقات</h2>
-            <p className="text-[9px] opacity-70">متصل الآن لمراجعة طلبك</p>
+            <p className="text-[9px] opacity-70">متصل الآن للمراجعة (تحديث تلقائي)</p>
           </div>
           <MoreVertical size={20} className="opacity-40" />
         </div>

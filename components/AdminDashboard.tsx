@@ -54,18 +54,24 @@ const AdminDashboard: React.FC = () => {
   };
 
   const loadMessages = async (id: string) => {
-    const { data } = await supabase
-      .from('complaint_messages')
-      .select('*')
-      .eq('complaint_id', id)
-      .order('created_at', { ascending: true });
-    if (data) {
-      setMessages(data);
-      messagesRef.current = data;
+    try {
+      const { data } = await supabase
+        .from('complaint_messages')
+        .select('*')
+        .eq('complaint_id', id)
+        .order('created_at', { ascending: true });
+      
+      if (data && JSON.stringify(data) !== JSON.stringify(messagesRef.current)) {
+        setMessages(data);
+        messagesRef.current = data;
+      }
+    } catch (e) {
+      console.error(e);
     }
   };
 
-  const fetchComplaints = async () => {
+  const fetchComplaints = async (showLoading = false) => {
+    if (showLoading) setLoading(true);
     try {
       const { data: rawComps, error: rawError } = await supabase
         .from('complaints')
@@ -100,15 +106,15 @@ const AdminDashboard: React.FC = () => {
       console.error("Fetch Error:", err);
       setError("خطأ في جلب البيانات.");
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   };
 
-  // المزامنة الفورية (Real-time) - واتساب بروتوكول
+  // المزامنة الفورية الشاملة (Real-time + Polling 1s)
   useEffect(() => {
-    fetchComplaints();
+    fetchComplaints(true);
 
-    const channel = supabase.channel('whatsapp_admin_v3')
+    const channel = supabase.channel('whatsapp_admin_v4')
       .on('postgres_changes', { 
         event: 'INSERT', 
         schema: 'public', 
@@ -116,15 +122,12 @@ const AdminDashboard: React.FC = () => {
       }, (payload) => {
         const newMsg = payload.new;
         
-        // 1. تحديث ترتيب القائمة (تصدر المحادثة النشطة)
         setComplaints(prev => {
           const index = prev.findIndex(c => c.id === newMsg.complaint_id);
           if (index === -1) {
-            // إذا كانت الشكوى غير موجودة، نقوم بجلب الكل مجدداً لضمان التحديث
             fetchComplaints();
             return prev;
           }
-          
           const updated = [...prev];
           const item = { ...updated[index], last_activity: newMsg.created_at };
           updated.splice(index, 1);
@@ -132,9 +135,7 @@ const AdminDashboard: React.FC = () => {
           return updated;
         });
 
-        // 2. تحديث الرسائل في المحادثة المفتوحة (لحظياً)
         if (selectedIdRef.current === newMsg.complaint_id) {
-          // التحقق من عدم التكرار باستخدام المعرف (ID)
           const exists = messagesRef.current.some(m => String(m.id) === String(newMsg.id));
           if (!exists) {
             setMessages(prev => [...prev, newMsg]);
@@ -148,12 +149,19 @@ const AdminDashboard: React.FC = () => {
       }, () => {
         fetchComplaints();
       })
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') console.log('Admin Realtime: Connected');
-      });
+      .subscribe();
+
+    // تحديث تلقائي كل ثانية (Polling) لضمان واتساب ستايل
+    const interval = setInterval(() => {
+      fetchComplaints();
+      if (selectedIdRef.current) {
+        loadMessages(selectedIdRef.current);
+      }
+    }, 1000);
 
     return () => {
       supabase.removeChannel(channel);
+      clearInterval(interval);
     };
   }, []);
 
@@ -166,7 +174,6 @@ const AdminDashboard: React.FC = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      // تحديث متفائل للواجهة (Optimistic UI) لضمان السرعة الفائقة
       const tempId = `temp-${Date.now()}`;
       const optimisticMsg = {
         id: tempId,
@@ -187,8 +194,6 @@ const AdminDashboard: React.FC = () => {
       }]).select().single();
       
       if (sendError) throw sendError;
-
-      // استبدال الرسالة المؤقتة بالرسالة الحقيقية
       setMessages(prev => prev.map(m => m.id === tempId ? sentMsg : m));
       
     } catch (err: any) {
@@ -214,7 +219,7 @@ const AdminDashboard: React.FC = () => {
     return (
       <div className="flex flex-col items-center justify-center p-24 gap-4">
         <Loader2 className="animate-spin text-[#9B4A4E]" size={40} />
-        <p className="text-gray-400 text-[10px] font-black tracking-widest">تنشيط المزامنة المباشرة...</p>
+        <p className="text-gray-400 text-[10px] font-black tracking-widest">تنشيط المزامنة اللحظية...</p>
       </div>
     );
   }
@@ -292,13 +297,13 @@ const AdminDashboard: React.FC = () => {
     <div className="space-y-4 py-2 animate-in fade-in duration-500">
       <div className="bg-white rounded-[32px] p-6 shadow-sm border border-gray-100 mb-6 mx-1">
          <div className="flex items-center justify-between mb-6 text-right">
-            <button onClick={fetchComplaints} className="p-2 text-gray-300 hover:text-[#9B4A4E]">
+            <button onClick={() => fetchComplaints(true)} className="p-2 text-gray-300 hover:text-[#9B4A4E]">
               <RefreshCcw size={18} className={loading ? 'animate-spin text-[#9B4A4E]' : ''} />
             </button>
             <div>
               <h2 className="font-black text-gray-800 text-lg">لوحة الرصد الفوري</h2>
               <div className="flex items-center gap-1 justify-end mt-1">
-                 <span className="text-[10px] text-green-500 font-black">المزامنة نَشطة</span>
+                 <span className="text-[10px] text-green-500 font-black">وضع واتساب نَشط (1s)</span>
                  <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse shadow-[0_0_5px_green]"></div>
               </div>
             </div>
@@ -334,7 +339,7 @@ const AdminDashboard: React.FC = () => {
                 {isJustActive && (
                   <div className="absolute top-0 right-0 p-1.5 bg-[#9B4A4E] text-white rounded-bl-xl shadow-md flex items-center gap-1">
                      <Sparkles size={10} />
-                     <span className="text-[7px] font-black">جديد</span>
+                     <span className="text-[7px] font-black">نشط الآن</span>
                   </div>
                 )}
                 <div className={`w-14 h-14 rounded-2xl flex items-center justify-center transition-all ${isJustActive ? 'bg-[#9B4A4E]/10 text-[#9B4A4E]' : 'bg-gray-50 text-gray-400'}`}>

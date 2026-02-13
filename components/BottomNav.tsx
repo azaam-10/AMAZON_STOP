@@ -1,30 +1,32 @@
 
 import React, { useState } from 'react';
-import { Home, ShieldAlert, LifeBuoy, FileClock, User, Lock } from 'lucide-react';
+import { Home, ShieldAlert, LifeBuoy, FileClock, User, Lock, LayoutDashboard } from 'lucide-react';
 
 interface BottomNavProps {
   activeTab: string;
   onTabChange: (tab: string) => void;
+  isAdmin?: boolean;
 }
 
-const navItems = [
-  { id: 'Home', icon: Home, label: 'الرئيسية' },
-  { id: 'Recovery', icon: ShieldAlert, label: 'استرداد' },
-  { id: 'History', icon: FileClock, label: 'السجلات' },
-  { id: 'Support', icon: LifeBuoy, label: 'المساعدة' },
-  { id: 'Profile', icon: User, label: 'حسابي' },
-];
-
-const BottomNav: React.FC<BottomNavProps> = ({ activeTab, onTabChange }) => {
+const BottomNav: React.FC<BottomNavProps> = ({ activeTab, onTabChange, isAdmin }) => {
   const [blockedId, setBlockedId] = useState<string | null>(null);
 
-  // تمت إزالة 'Profile' من القائمة المقفلة للسماح للمستخدم بالوصول إليها
-  const blockedTabs = ['Recovery', 'History', 'Support'];
+  const navItems = [
+    { id: 'Home', icon: Home, label: 'الرئيسية' },
+    { id: 'Recovery', icon: ShieldAlert, label: 'استرداد' },
+    { id: 'Support', icon: LifeBuoy, label: 'المساعدة' },
+    { id: 'Profile', icon: User, label: 'حسابي' },
+  ];
+
+  if (isAdmin) {
+    navItems.splice(1, 0, { id: 'Admin', icon: LayoutDashboard, label: 'المسؤول' });
+  }
+
+  const blockedTabs = ['History', 'Support'];
 
   const handleTabClick = (id: string) => {
     if (blockedTabs.includes(id)) {
       setBlockedId(id);
-      // إخفاء التأثير بعد فترة وجيزة (1.5 ثانية)
       setTimeout(() => setBlockedId(null), 1500);
       return;
     }
@@ -44,47 +46,30 @@ const BottomNav: React.FC<BottomNavProps> = ({ activeTab, onTabChange }) => {
             onClick={() => handleTabClick(item.id)}
             className="flex flex-col items-center gap-1 flex-1 transition-all relative outline-none"
           >
-            {/* التنبيه الإبداعي للميزات المقفلة (Floating Glass Alert) */}
             {isBlocked && (
               <div className="absolute -top-12 left-1/2 -translate-x-1/2 z-50 animate-[bounce_1s_infinite]">
-                <div className="bg-red-500/90 backdrop-blur-md text-white text-[10px] font-bold px-3 py-1.5 rounded-full shadow-lg shadow-red-500/30 flex items-center gap-1 border border-red-400/50 whitespace-nowrap">
-                  <Lock size={12} fill="currentColor" />
-                  الميزة مقفلة
+                <div className="bg-red-500/90 backdrop-blur-md text-white text-[10px] font-bold px-3 py-1.5 rounded-full shadow-lg border border-red-400/50 whitespace-nowrap">
+                  <Lock size={12} fill="currentColor" /> الميزة مقفلة
                 </div>
-                {/* سهم صغير أسفل التنبيه */}
-                <div className="w-2 h-2 bg-red-500 rotate-45 mx-auto -mt-1 shadow-sm"></div>
+                <div className="w-2 h-2 bg-red-50 rotate-45 mx-auto -mt-1 shadow-sm"></div>
               </div>
             )}
             
-            {/* الأيقونة مع تأثيرات الحالة */}
             <div className={`
               p-2 rounded-2xl transition-all duration-300 relative
-              ${isActive ? "bg-[#9B4A4E] text-white shadow-xl shadow-[#9B4A4E]/30 scale-110" : "text-gray-400"}
-              ${isBlocked ? "animate-[shake_0.4s_ease-in-out] text-red-500 bg-red-50 ring-2 ring-red-200" : ""}
+              ${isActive ? "bg-[#9B4A4E] text-white shadow-xl scale-110" : "text-gray-400"}
+              ${isBlocked ? "animate-[shake_0.4s_ease-in-out] text-red-500 bg-red-50" : ""}
             `}>
-              {/* تأثير هالة حمراء (Pulse) عند الحظر */}
-              {isBlocked && (
-                <div className="absolute inset-0 bg-red-400/20 rounded-2xl animate-ping"></div>
-              )}
-              
+              {isBlocked && <div className="absolute inset-0 bg-red-400/20 rounded-2xl animate-ping"></div>}
               <Icon size={24} strokeWidth={isActive ? 2.5 : 2} />
-              
-              {/* رمز القفل الصغير عند الحظر */}
-              {isBlocked && (
-                <div className="absolute -top-1 -right-1 bg-red-600 text-white p-0.5 rounded-full border-2 border-white shadow-sm">
-                   <Lock size={8} strokeWidth={4} />
-                </div>
-              )}
             </div>
 
-            <span className={`text-[10px] font-bold tracking-tight mt-0.5 transition-colors ${isActive ? "text-[#9B4A4E]" : "text-gray-400"} ${isBlocked ? "text-red-500" : ""}`}>
+            <span className={`text-[10px] font-bold mt-0.5 transition-colors ${isActive ? "text-[#9B4A4E]" : "text-gray-400"} ${isBlocked ? "text-red-500" : ""}`}>
               {item.label}
             </span>
           </button>
         );
       })}
-
-      {/* إضافة الأنماط اللازمة للحركات */}
       <style>{`
         @keyframes shake {
           0%, 100% { transform: translateX(0); }

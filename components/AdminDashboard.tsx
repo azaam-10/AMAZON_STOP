@@ -28,16 +28,14 @@ const AdminDashboard: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   
   const chatEndRef = useRef<HTMLDivElement>(null);
+  // استخدام Ref لمواجهة مشكلة Stale Closures في اشتراكات Real-time
   const selectedIdRef = useRef<string | null>(null);
 
-  // تحديث المرجع عند تغيير المعرف المختار لضمان وصول القيمة الصحيحة لردود الفعل (Callbacks)
   useEffect(() => {
     selectedIdRef.current = selectedId;
   }, [selectedId]);
 
   const fetchComplaints = async () => {
-    setLoading(true);
-    setError(null);
     try {
       const { data: rawComps, error: rawError } = await supabase
         .from('complaints')
@@ -45,12 +43,7 @@ const AdminDashboard: React.FC = () => {
         .order('created_at', { ascending: false });
 
       if (rawError) throw rawError;
-
-      if (!rawComps || rawComps.length === 0) {
-        setComplaints([]);
-        setLoading(false);
-        return;
-      }
+      if (!rawComps) return;
 
       const userIds = [...new Set(rawComps.map(c => c.user_id))];
       const { data: profiles } = await supabase
@@ -75,18 +68,18 @@ const AdminDashboard: React.FC = () => {
       setComplaints(processed);
     } catch (err: any) {
       console.error("Fetch Error:", err);
-      setError("خطأ في الاتصال بالسيرفر. يرجى التنشيط.");
+      setError("خطأ في الاتصال. يرجى التنشيط.");
     } finally {
       setLoading(false);
     }
   };
 
-  // إعداد الاشتراك الفوري (Real-time)
+  // الاشتراك العالمي للمزامنة الفورية (WhatsApp Mode)
   useEffect(() => {
     fetchComplaints();
 
-    // قناة الاستماع الموحدة للرسائل الجديدة والشكاوى الجديدة
-    const channel = supabase.channel('admin_global_realtime')
+    // إنشاء قناة موحدة لكل التحديثات
+    const channel = supabase.channel('admin_main_channel')
       .on('postgres_changes', { 
         event: 'INSERT', 
         schema: 'public', 
@@ -94,21 +87,25 @@ const AdminDashboard: React.FC = () => {
       }, (payload) => {
         const newMsg = payload.new;
         
-        // 1. تحديث ترتيب القائمة فوراً (نقل الدردشة للأعلى)
+        // 1. تحديث ترتيب القائمة فوراً
         setComplaints(prev => {
           const index = prev.findIndex(c => c.id === newMsg.complaint_id);
-          if (index === -1) return prev; // إذا لم تكن في القائمة بعد (نحتاج لعمل fetch للجديد)
+          if (index === -1) {
+             // إذا كانت شكوى جديدة تماماً لم تظهر بعد
+             return prev; 
+          }
           
           const updated = [...prev];
           const item = { ...updated[index], last_activity: newMsg.created_at };
           updated.splice(index, 1);
-          updated.unshift(item); 
+          updated.unshift(item); // دفع للأعلى
           return updated;
         });
 
-        // 2. تحديث نافذة الدردشة المفتوحة حالياً (مثل واتساب)
+        // 2. تحديث الرسائل في الدردشة المفتوحة حالياً (لحظياً)
         if (selectedIdRef.current === newMsg.complaint_id) {
           setMessages(prev => {
+            // منع التكرار
             if (prev.find(m => m.id === newMsg.id)) return prev;
             return [...prev, newMsg];
           });
@@ -119,16 +116,19 @@ const AdminDashboard: React.FC = () => {
         schema: 'public', 
         table: 'complaints' 
       }, () => {
-        fetchComplaints(); // جلب الشكاوى الجديدة فوراً
+        // تحديث القائمة عند وصول عميل جديد
+        fetchComplaints();
       })
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') console.log("Real-time connected!");
+      });
 
     return () => {
       supabase.removeChannel(channel);
     };
   }, []);
 
-  // جلب الرسائل عند فتح محادثة
+  // جلب الرسائل عند تغيير المعرف المختار
   useEffect(() => {
     if (!selectedId) {
       setMessages([]);
@@ -145,8 +145,11 @@ const AdminDashboard: React.FC = () => {
     loadMessages();
   }, [selectedId]);
 
+  // التمرير التلقائي للأسفل
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: 'auto' });
+    }
   }, [messages]);
 
   const handleSendMessage = async () => {
@@ -156,16 +159,20 @@ const AdminDashboard: React.FC = () => {
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      await supabase.from('complaint_messages').insert([{
+      if (!user) return;
+
+      const { error: sendError } = await supabase.from('complaint_messages').insert([{
         complaint_id: selectedId,
-        user_id: user?.id,
+        user_id: user.id,
         text: text,
         sender: 'support'
       }]);
-      // لا نحتاج لتحديث الـ state يدوياً هنا لأن الـ Real-time سيقوم بذلك فوراً
+      
+      if (sendError) throw sendError;
     } catch (err: any) {
       console.error("Send Error:", err);
       setInputValue(text);
+      setError("فشل في إرسال الرسالة.");
     }
   };
 
@@ -184,7 +191,7 @@ const AdminDashboard: React.FC = () => {
     return (
       <div className="flex flex-col items-center justify-center p-24 gap-4">
         <Loader2 className="animate-spin text-[#9B4A4E]" size={40} />
-        <p className="text-gray-400 text-[10px] font-black tracking-widest">جاري المزامنة المباشرة...</p>
+        <p className="text-gray-400 text-[10px] font-black tracking-widest">مزامنة فورية للمحادثات...</p>
       </div>
     );
   }
@@ -193,7 +200,6 @@ const AdminDashboard: React.FC = () => {
     const comp = complaints.find(c => c.id === selectedId);
     return (
       <div className="fixed inset-0 z-[110] bg-[#F8FAFC] flex flex-col max-w-[430px] mx-auto animate-in slide-in-from-left duration-300">
-        {/* هيدر الدردشة */}
         <div className="bg-[#9B4A4E] text-white px-4 pt-12 pb-4 flex items-center gap-3 shadow-xl z-30">
           <button onClick={() => setSelectedId(null)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
             <ChevronLeft size={24} />
@@ -207,9 +213,7 @@ const AdminDashboard: React.FC = () => {
           </div>
         </div>
         
-        {/* المحتوى مع كارت البيانات الثابت */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-32">
-          {/* كارت البيانات الأصلي - ثابت ولا يختفي أبداً */}
           <div className="bg-white p-4 rounded-3xl border border-[#9B4A4E]/20 shadow-md text-right sticky top-0 z-20">
              <div className="flex items-center gap-2 mb-3 text-[#9B4A4E] font-bold text-[10px] border-b border-gray-50 pb-2">
                 <Pin size={14} className="rotate-45" /> البيانات الأصلية للطلب
@@ -224,19 +228,12 @@ const AdminDashboard: React.FC = () => {
                  <p className="text-gray-800 font-bold text-xs">#{comp?.mission_id}</p>
                </div>
              </div>
-             {comp?.screenshot_url && (
-               <div className="mb-3 rounded-xl overflow-hidden border border-gray-100">
-                  <p className="text-[8px] text-gray-400 mb-1 font-bold">لقطة الشاشة الأصلية:</p>
-                  <img src={comp.screenshot_url} className="w-full h-24 object-cover cursor-pointer hover:scale-105 transition-transform" onClick={() => window.open(comp.screenshot_url, '_blank')} />
-               </div>
-             )}
              <div className="bg-blue-50/50 p-2.5 rounded-xl border border-blue-100/30 flex items-center justify-between">
                 <p className="text-[9px] text-blue-600 truncate underline flex-1 ml-2">{comp?.platform_link}</p>
                 <ExternalLink size={12} className="text-blue-400" />
              </div>
           </div>
 
-          {/* الرسائل المباشرة */}
           {messages.map((m) => (
             <div key={m.id} className={`max-w-[85%] flex flex-col ${m.sender === 'support' ? 'self-end' : 'self-start'}`}>
                <div className={`rounded-2xl overflow-hidden shadow-sm ${m.sender === 'support' ? 'bg-[#9B4A4E] text-white rounded-tr-none' : 'bg-white text-gray-800 rounded-tl-none border border-gray-100'}`}>
@@ -260,7 +257,6 @@ const AdminDashboard: React.FC = () => {
           <div ref={chatEndRef} />
         </div>
 
-        {/* حقل الرد الفوري */}
         <div className="p-4 border-t flex items-center gap-2 bg-white pb-10 shadow-[0_-10px_25px_rgba(0,0,0,0.05)] z-30">
           <input 
             type="text" 
@@ -281,7 +277,6 @@ const AdminDashboard: React.FC = () => {
 
   return (
     <div className="space-y-4 py-2 animate-in fade-in duration-500">
-      {/* البحث والوضع المباشر */}
       <div className="bg-white rounded-[32px] p-6 shadow-sm border border-gray-100 mb-6 mx-1">
          <div className="flex items-center justify-between mb-6">
             <button onClick={fetchComplaints} className="p-2 text-gray-300 hover:text-[#9B4A4E] transition-all active:rotate-180">
@@ -290,7 +285,7 @@ const AdminDashboard: React.FC = () => {
             <div className="text-right">
               <h2 className="font-black text-gray-800 text-lg">لوحة الرصد الفوري</h2>
               <div className="flex items-center gap-1 justify-end mt-1">
-                 <span className="text-[10px] text-green-500 font-black">وضع واتساب نَشط</span>
+                 <span className="text-[10px] text-green-500 font-black">وضع المزامنة نَشط</span>
                  <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse shadow-[0_0_5px_green]"></div>
               </div>
             </div>
@@ -308,7 +303,6 @@ const AdminDashboard: React.FC = () => {
          </div>
       </div>
 
-      {/* قائمة الدردشات مرتبة تلقائياً */}
       <div className="space-y-3 px-1 pb-32">
         {filteredComplaints.length === 0 && !loading ? (
           <div className="text-center py-24 flex flex-col items-center gap-4">
@@ -319,7 +313,7 @@ const AdminDashboard: React.FC = () => {
           </div>
         ) : (
           filteredComplaints.map(c => {
-            const isJustActive = (new Date().getTime() - new Date(c.last_activity).getTime()) < 60000;
+            const isJustActive = (new Date().getTime() - new Date(c.last_activity).getTime()) < 30000;
             return (
               <button 
                 key={c.id} 

@@ -4,7 +4,7 @@ import { Gavel, Send, ChevronRight, MoreVertical, CheckCheck, Loader2, MessageSq
 import { supabase } from '../lib/supabase.ts';
 
 interface Message {
-  id: number;
+  id: any;
   text?: string;
   imageUrl?: string;
   sender: 'user' | 'support';
@@ -24,16 +24,15 @@ const RecoveryForm: React.FC = () => {
   const [formData, setFormData] = useState({ link: '', missionId: '', amount: '', reason: 'تجميد الرصيد' });
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
+  
   const chatEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatImageRef = useRef<HTMLInputElement>(null);
 
   const formatTime = (date: string | Date) => new Date(date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-  // جلب البيانات الأولية والاشتراك في التحديثات الفورية
+  // التحقق من وجود شكوى سابقة
   useEffect(() => {
-    let channel: any;
-
     async function checkStatus() {
       try {
         const { data: { user } } = await supabase.auth.getUser();
@@ -66,54 +65,75 @@ const RecoveryForm: React.FC = () => {
               time: formatTime(m.created_at) 
             })));
           }
-
-          // الاشتراك في الرسائل الجديدة لهذا العميل فوراً
-          channel = supabase.channel(`chat_user_${complaint.id}`)
-            .on('postgres_changes', { 
-              event: 'INSERT', 
-              schema: 'public', 
-              table: 'complaint_messages', 
-              filter: `complaint_id=eq.${complaint.id}` 
-            }, (payload) => {
-              const newMsg = payload.new;
-              setMessages(prev => {
-                if (prev.find(m => m.id === newMsg.id)) return prev;
-                return [...prev, {
-                  id: newMsg.id,
-                  text: newMsg.text,
-                  imageUrl: newMsg.image_url,
-                  sender: newMsg.sender,
-                  time: formatTime(newMsg.created_at)
-                }];
-              });
-            })
-            .subscribe();
         }
-      } finally { setLoading(false); }
+      } catch (e) {
+        console.error(e);
+      } finally { 
+        setLoading(false); 
+      }
     }
     checkStatus();
-
-    return () => {
-      if (channel) supabase.removeChannel(channel);
-    };
   }, []);
 
+  // نظام الاشتراك الفوري للعميل
   useEffect(() => {
-    if (isChatActive) chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (!currentComplaintId) return;
+
+    const channel = supabase.channel(`chat_${currentComplaintId}`)
+      .on('postgres_changes', { 
+        event: 'INSERT', 
+        schema: 'public', 
+        table: 'complaint_messages', 
+        filter: `complaint_id=eq.${currentComplaintId}` 
+      }, (payload) => {
+        const newMsg = payload.new;
+        setMessages(prev => {
+          // منع التكرار
+          if (prev.find(m => m.id === newMsg.id)) return prev;
+          return [...prev, {
+            id: newMsg.id,
+            text: newMsg.text,
+            imageUrl: newMsg.image_url,
+            sender: newMsg.sender,
+            time: formatTime(newMsg.created_at)
+          }];
+        });
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [currentComplaintId]);
+
+  // التمرير التلقائي
+  useEffect(() => {
+    if (isChatActive && chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: "auto" });
+    }
   }, [messages, isChatActive]);
 
   const handleSendMessage = async () => {
     if (!inputValue.trim() || !currentComplaintId) return;
     const text = inputValue;
     setInputValue('');
-    const { data: { user } } = await supabase.auth.getUser();
-    await supabase.from('complaint_messages').insert([{ 
-      complaint_id: currentComplaintId, 
-      user_id: user?.id, 
-      text: text, 
-      sender: 'user' 
-    }]);
-    // التحديث سيتم تلقائياً عبر Real-time channel
+    
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { error } = await supabase.from('complaint_messages').insert([{ 
+        complaint_id: currentComplaintId, 
+        user_id: user.id, 
+        text: text, 
+        sender: 'user' 
+      }]);
+      
+      if (error) throw error;
+    } catch (e) {
+      console.error(e);
+      setInputValue(text);
+    }
   };
 
   const handleChatImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -122,16 +142,23 @@ const RecoveryForm: React.FC = () => {
     setIsChatUploading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      const fileName = `${user?.id}/${Date.now()}.jpg`;
+      if (!user) return;
+
+      const fileName = `${user.id}/${Date.now()}.jpg`;
       await supabase.storage.from('chat_images').upload(fileName, file);
       const { data: { publicUrl } } = supabase.storage.from('chat_images').getPublicUrl(fileName);
+      
       await supabase.from('complaint_messages').insert([{ 
         complaint_id: currentComplaintId, 
-        user_id: user?.id, 
+        user_id: user.id, 
         image_url: publicUrl, 
         sender: 'user' 
       }]);
-    } finally { setIsChatUploading(false); }
+    } catch (e) {
+      console.error(e);
+    } finally { 
+      setIsChatUploading(false); 
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -140,12 +167,14 @@ const RecoveryForm: React.FC = () => {
     setIsSubmitting(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      const fileName = `initial/${user?.id}-${Date.now()}.jpg`;
+      if (!user) return;
+
+      const fileName = `initial/${user.id}-${Date.now()}.jpg`;
       await supabase.storage.from('complaints').upload(fileName, selectedImage);
       const { data: { publicUrl } } = supabase.storage.from('complaints').getPublicUrl(fileName);
       
-      const { data: comp } = await supabase.from('complaints').insert([{ 
-        user_id: user?.id, 
+      const { data: comp, error: compErr } = await supabase.from('complaints').insert([{ 
+        user_id: user.id, 
         platform_link: formData.link, 
         mission_id: formData.missionId, 
         amount: parseFloat(formData.amount), 
@@ -153,17 +182,25 @@ const RecoveryForm: React.FC = () => {
         screenshot_url: publicUrl 
       }]).select().single();
 
+      if (compErr) throw compErr;
+
       if (comp) {
         const reportText = `📋 *تفاصيل الطلب:*\nالرابط: ${formData.link}\nالمهمة: #${formData.missionId}\nالمبلغ: ${formData.amount} USDT`;
         await supabase.from('complaint_messages').insert([
-          { complaint_id: comp.id, user_id: user?.id, image_url: publicUrl, sender: 'user' },
-          { complaint_id: comp.id, user_id: user?.id, text: reportText, sender: 'user' }
+          { complaint_id: comp.id, user_id: user.id, image_url: publicUrl, sender: 'user' },
+          { complaint_id: comp.id, user_id: user.id, text: reportText, sender: 'user' }
         ]);
         
-        // إعادة تحميل الصفحة لتنشيط قناة الـ Real-time للشكوى الجديدة
-        window.location.reload();
+        // إعادة تحميل البيانات محلياً لتنشيط الاشتراك
+        setCurrentComplaintId(comp.id);
+        setHasExistingComplaint(true);
       }
-    } finally { setIsSubmitting(false); }
+    } catch (e) {
+      console.error(e);
+      alert("حدث خطأ في إرسال الشكوى.");
+    } finally { 
+      setIsSubmitting(false); 
+    }
   };
 
   if (loading) return <div className="p-10 flex justify-center"><Loader2 className="animate-spin text-[#9B4A4E]" /></div>;

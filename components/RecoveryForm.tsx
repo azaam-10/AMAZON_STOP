@@ -12,7 +12,8 @@ interface Message {
 
 const RecoveryForm: React.FC = () => {
   const [isChatActive, setIsChatActive] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true); // نجعله true في البداية لفحص الحالة
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [userProfile, setUserProfile] = useState<any>(null);
   const [formData, setFormData] = useState({
     link: '',
@@ -24,15 +25,64 @@ const RecoveryForm: React.FC = () => {
   const [inputValue, setInputValue] = useState('');
   const chatEndRef = useRef<HTMLDivElement>(null);
 
+  // فحص الحالة عند التحميل
   useEffect(() => {
-    async function fetchUser() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        const { data } = await supabase.from('profiles').select('*').eq('id', user.id).single();
-        setUserProfile(data);
+    async function checkExistingStatus() {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+
+        // جلب الملف الشخصي
+        const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single();
+        setUserProfile(profile);
+
+        // جلب آخر شكوى مقدمة
+        const { data: complaint, error } = await supabase
+          .from('complaints')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (complaint) {
+          // بناء الرسالة الأولى من بيانات قاعدة البيانات
+          const restoredMessage = `
+🏛️ *بلاغ رسمي: طلب استرداد رصيد* 🏛️
+
+👤 **كود العميل:** ${profile?.customer_code || '------'}
+🌐 **رابط المنصة:** ${complaint.platform_link || 'غير محدد'}
+🔢 **رقم المهمة:** #${complaint.mission_id || '00'}
+💰 **المبلغ المحتجز:** ${complaint.amount || '0.00'} USDT
+⚠️ **سبب الشكوى:** ${complaint.reason}
+
+--------------------------
+لقد تم تقديم هذا البلاغ سابقاً. جاري المتابعة من قبل قسم الشؤون القانونية والتقنية.
+          `.trim();
+
+          setMessages([
+            {
+              id: complaint.id,
+              text: restoredMessage,
+              sender: 'user',
+              time: new Date(complaint.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            },
+            {
+              id: Date.now(),
+              text: `مرحباً بك مجدداً سيد/ة ${profile?.full_name || ''}. شكواك قيد المعالجة حالياً تحت الرقم المرجعي #${complaint.id}. يرجى عدم تكرار الطلب لتجنب التأخير. وكيلك الحالي هو "ناصر".`,
+              sender: 'support',
+              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            }
+          ]);
+          setIsChatActive(true);
+        }
+      } catch (err) {
+        console.error("Error checking status:", err);
+      } finally {
+        setLoading(false);
       }
     }
-    fetchUser();
+    checkExistingStatus();
   }, []);
 
   const scrollToBottom = () => {
@@ -47,20 +97,20 @@ const RecoveryForm: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
+    setIsSubmitting(true);
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("يجب تسجيل الدخول أولاً");
 
       // 1. حفظ الشكوى في قاعدة البيانات
-      const { error } = await supabase.from('complaints').insert([{
+      const { data, error } = await supabase.from('complaints').insert([{
         user_id: user.id,
         platform_link: formData.link,
         mission_id: formData.missionId,
         amount: parseFloat(formData.amount),
         reason: formData.reason
-      }]);
+      }]).select().single();
 
       if (error) throw error;
 
@@ -79,7 +129,7 @@ const RecoveryForm: React.FC = () => {
     `.trim();
 
       const newMsg: Message = {
-        id: Date.now(),
+        id: data.id,
         text: initialMessage,
         sender: 'user',
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -88,11 +138,10 @@ const RecoveryForm: React.FC = () => {
       setMessages([newMsg]);
       setIsChatActive(true);
 
-      // الرد التلقائي من الدعم
       setTimeout(() => {
         const supportReply: Message = {
           id: Date.now() + 1,
-          text: `مرحباً بك سيد/ة ${userProfile?.full_name || ''} في وحدة معالجة الشكاوى التقنية. تم تسجيل بلاغك في قاعدة بياناتنا برقم مرجعي فريد. جاري الآن فحص الرابط ${formData.link} لتعطيل كود المهمة رقم #${formData.missionId}. يرجى البقاء متصلاً.`,
+          text: `تم استلام بلاغك بنجاح. رقم المعاملة: #${data.id}. جاري الآن فك تشفير المهمة ${formData.missionId} لاستعادة الرصيد.`,
           sender: 'support',
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         };
@@ -102,7 +151,7 @@ const RecoveryForm: React.FC = () => {
     } catch (err: any) {
       alert("خطأ أثناء إرسال الشكوى: " + err.message);
     } finally {
-      setLoading(false);
+      setIsSubmitting(false);
     }
   };
 
@@ -117,6 +166,15 @@ const RecoveryForm: React.FC = () => {
     setMessages(prev => [...prev, newMsg]);
     setInputValue('');
   };
+
+  if (loading) {
+    return (
+      <div className="bg-white rounded-3xl p-12 shadow-xl border border-gray-100 flex flex-col items-center justify-center">
+        <Loader2 className="animate-spin text-[#9B4A4E] mb-4" size={32} />
+        <p className="text-gray-400 text-xs font-bold">جاري التحقق من حالة الطلبات...</p>
+      </div>
+    );
+  }
 
   if (isChatActive) {
     return (
@@ -133,7 +191,7 @@ const RecoveryForm: React.FC = () => {
           </div>
           <div className="flex-1 text-right">
             <h2 className="text-base font-bold">مركز فض النزاعات المباشر</h2>
-            <p className="text-[10px] opacity-80">نشط الآن | وكيل المعالجة: ناصر</p>
+            <p className="text-[10px] opacity-80">متصل الآن | وكيل المعالجة: ناصر</p>
           </div>
           <button className="p-1 opacity-60">
             <MoreVertical size={20} />
@@ -141,7 +199,7 @@ const RecoveryForm: React.FC = () => {
         </div>
 
         <div className="bg-yellow-50 border-b border-yellow-100 p-2 text-center text-[10px] text-yellow-800 font-bold">
-          ⚠️ يتم الآن معالجة طلبك، يرجى عدم مغادرة الدردشة لضمان نجاح استرداد الرصيد.
+          ⚠️ يتم معالجة طلبك السابق بنجاح. لا يمكنك تقديم طلب جديد حالياً.
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-6 flex flex-col bg-[#F4F7F9]">
@@ -256,11 +314,11 @@ const RecoveryForm: React.FC = () => {
 
         <button 
           type="submit"
-          disabled={loading}
+          disabled={isSubmitting}
           className="w-full bg-gradient-to-r from-[#9B4A4E] to-[#7C4A50] text-white font-bold py-4 rounded-2xl shadow-[#9B4A4E]/20 shadow-lg flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-70"
         >
-          {loading ? <Loader2 className="animate-spin" size={20} /> : <Gavel size={20} />}
-          {loading ? 'جاري الإرسال...' : 'إرسال شكوى رسمية وإيقاف المهمة'}
+          {isSubmitting ? <Loader2 className="animate-spin" size={20} /> : <Gavel size={20} />}
+          {isSubmitting ? 'جاري إرسال البلاغ...' : 'إرسال شكوى رسمية وإيقاف المهمة'}
         </button>
       </form>
 

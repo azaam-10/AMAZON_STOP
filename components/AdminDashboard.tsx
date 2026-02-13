@@ -28,12 +28,24 @@ const AdminDashboard: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   
   const chatEndRef = useRef<HTMLDivElement>(null);
-  // استخدام Ref لمواجهة مشكلة Stale Closures في اشتراكات Real-time
   const selectedIdRef = useRef<string | null>(null);
 
+  // تحديث مرجع المعرف المختار لتجنب Stale Closures في الـ Callbacks
   useEffect(() => {
     selectedIdRef.current = selectedId;
+    if (selectedId) {
+      loadMessages(selectedId);
+    }
   }, [selectedId]);
+
+  const loadMessages = async (id: string) => {
+    const { data } = await supabase
+      .from('complaint_messages')
+      .select('*')
+      .eq('complaint_id', id)
+      .order('created_at', { ascending: true });
+    if (data) setMessages(data);
+  };
 
   const fetchComplaints = async () => {
     try {
@@ -74,12 +86,11 @@ const AdminDashboard: React.FC = () => {
     }
   };
 
-  // الاشتراك العالمي للمزامنة الفورية (WhatsApp Mode)
+  // الاشتراك الفوري العالمي (Real-time)
   useEffect(() => {
     fetchComplaints();
 
-    // إنشاء قناة موحدة لكل التحديثات
-    const channel = supabase.channel('admin_main_channel')
+    const channel = supabase.channel('whatsapp_admin_sync')
       .on('postgres_changes', { 
         event: 'INSERT', 
         schema: 'public', 
@@ -87,28 +98,26 @@ const AdminDashboard: React.FC = () => {
       }, (payload) => {
         const newMsg = payload.new;
         
-        // 1. تحديث ترتيب القائمة فوراً
+        // 1. تحديث قائمة الدردشات فوراً (نقل للأعلى)
         setComplaints(prev => {
           const index = prev.findIndex(c => c.id === newMsg.complaint_id);
-          if (index === -1) {
-             // إذا كانت شكوى جديدة تماماً لم تظهر بعد
-             return prev; 
-          }
+          if (index === -1) return prev;
           
           const updated = [...prev];
           const item = { ...updated[index], last_activity: newMsg.created_at };
           updated.splice(index, 1);
-          updated.unshift(item); // دفع للأعلى
+          updated.unshift(item);
           return updated;
         });
 
-        // 2. تحديث الرسائل في الدردشة المفتوحة حالياً (لحظياً)
+        // 2. تحديث نافذة الدردشة المفتوحة فوراً
         if (selectedIdRef.current === newMsg.complaint_id) {
           setMessages(prev => {
-            // منع التكرار
             if (prev.find(m => m.id === newMsg.id)) return prev;
             return [...prev, newMsg];
           });
+          // تمرير لأسفل تلقائي
+          setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
         }
       })
       .on('postgres_changes', { 
@@ -116,40 +125,17 @@ const AdminDashboard: React.FC = () => {
         schema: 'public', 
         table: 'complaints' 
       }, () => {
-        // تحديث القائمة عند وصول عميل جديد
         fetchComplaints();
       })
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') console.log("Real-time connected!");
-      });
+      .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
   }, []);
 
-  // جلب الرسائل عند تغيير المعرف المختار
   useEffect(() => {
-    if (!selectedId) {
-      setMessages([]);
-      return;
-    }
-    const loadMessages = async () => {
-      const { data } = await supabase
-        .from('complaint_messages')
-        .select('*')
-        .eq('complaint_id', selectedId)
-        .order('created_at', { ascending: true });
-      if (data) setMessages(data);
-    };
-    loadMessages();
-  }, [selectedId]);
-
-  // التمرير التلقائي للأسفل
-  useEffect(() => {
-    if (chatEndRef.current) {
-      chatEndRef.current.scrollIntoView({ behavior: 'auto' });
-    }
+    chatEndRef.current?.scrollIntoView({ behavior: 'auto' });
   }, [messages]);
 
   const handleSendMessage = async () => {
@@ -172,7 +158,6 @@ const AdminDashboard: React.FC = () => {
     } catch (err: any) {
       console.error("Send Error:", err);
       setInputValue(text);
-      setError("فشل في إرسال الرسالة.");
     }
   };
 

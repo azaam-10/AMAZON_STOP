@@ -31,7 +31,7 @@ const RecoveryForm: React.FC = () => {
 
   const formatTime = (date: string | Date) => new Date(date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-  // التحقق من وجود شكوى سابقة
+  // التحقق من وجود شكوى سابقة وجلب الرسائل
   useEffect(() => {
     async function checkStatus() {
       try {
@@ -75,11 +75,11 @@ const RecoveryForm: React.FC = () => {
     checkStatus();
   }, []);
 
-  // نظام الاشتراك الفوري للعميل
+  // المزامنة الفورية للعميل (Real-time)
   useEffect(() => {
     if (!currentComplaintId) return;
 
-    const channel = supabase.channel(`chat_${currentComplaintId}`)
+    const channel = supabase.channel(`whatsapp_user_${currentComplaintId}`)
       .on('postgres_changes', { 
         event: 'INSERT', 
         schema: 'public', 
@@ -88,7 +88,6 @@ const RecoveryForm: React.FC = () => {
       }, (payload) => {
         const newMsg = payload.new;
         setMessages(prev => {
-          // منع التكرار
           if (prev.find(m => m.id === newMsg.id)) return prev;
           return [...prev, {
             id: newMsg.id,
@@ -98,6 +97,8 @@ const RecoveryForm: React.FC = () => {
             time: formatTime(newMsg.created_at)
           }];
         });
+        // تمرير لأسفل عند وصول رسالة جديدة
+        setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
       })
       .subscribe();
 
@@ -106,10 +107,10 @@ const RecoveryForm: React.FC = () => {
     };
   }, [currentComplaintId]);
 
-  // التمرير التلقائي
+  // التمرير التلقائي عند فتح الدردشة أو تغير الرسائل
   useEffect(() => {
-    if (isChatActive && chatEndRef.current) {
-      chatEndRef.current.scrollIntoView({ behavior: "auto" });
+    if (isChatActive) {
+      chatEndRef.current?.scrollIntoView({ behavior: 'auto' });
     }
   }, [messages, isChatActive]);
 
@@ -191,13 +192,12 @@ const RecoveryForm: React.FC = () => {
           { complaint_id: comp.id, user_id: user.id, text: reportText, sender: 'user' }
         ]);
         
-        // إعادة تحميل البيانات محلياً لتنشيط الاشتراك
         setCurrentComplaintId(comp.id);
         setHasExistingComplaint(true);
       }
     } catch (e) {
       console.error(e);
-      alert("حدث خطأ في إرسال الشكوى.");
+      alert("حدث خطأ في تقديم الشكوى.");
     } finally { 
       setIsSubmitting(false); 
     }

@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Gavel, Send, ChevronRight, MoreVertical, CheckCheck, Loader2, MessageSquareText, Camera, Image as ImageIcon, Paperclip } from 'lucide-react';
+import { Gavel, Send, ChevronRight, MoreVertical, CheckCheck, Loader2, MessageSquareText, Camera, Image as ImageIcon, Paperclip, Copy, X } from 'lucide-react';
 import { supabase } from '../lib/supabase.ts';
 
 interface Message {
@@ -20,6 +20,8 @@ const RecoveryForm: React.FC = () => {
   const [isChatUploading, setIsChatUploading] = useState(false);
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [copyToast, setCopyToast] = useState(false);
+  const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
   
   const [formData, setFormData] = useState({ link: '', missionId: '', amount: '', reason: 'تجميد الرصيد' });
   const [messages, setMessages] = useState<Message[]>([]);
@@ -32,7 +34,6 @@ const RecoveryForm: React.FC = () => {
 
   const formatTime = (date: string | Date) => new Date(date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-  // مزامنة المرجع
   useEffect(() => {
     messagesRef.current = messages;
     if (isChatActive) {
@@ -46,6 +47,14 @@ const RecoveryForm: React.FC = () => {
     }
   };
 
+  const handleCopyText = (text: string) => {
+    if (!text) return;
+    navigator.clipboard.writeText(text);
+    setCopyToast(true);
+    setActiveMenuId(null);
+    setTimeout(() => setCopyToast(false), 2000);
+  };
+
   const loadMessages = async (id: string) => {
     try {
       const { data: dbMsgs } = await supabase
@@ -54,7 +63,7 @@ const RecoveryForm: React.FC = () => {
         .eq('complaint_id', id)
         .order('created_at', { ascending: true });
         
-      if (dbMsgs) {
+      if (dbMsgs && Array.isArray(dbMsgs)) {
         const mapped = dbMsgs.map(m => ({ 
           id: m.id, 
           text: m.text, 
@@ -63,7 +72,6 @@ const RecoveryForm: React.FC = () => {
           time: formatTime(m.created_at) 
         }));
         
-        // تحديث الحالة فقط إذا كانت البيانات مختلفة لتقليل إعادة الرندرة غير الضرورية
         if (JSON.stringify(mapped) !== JSON.stringify(messagesRef.current)) {
           setMessages(mapped);
           messagesRef.current = mapped;
@@ -74,7 +82,6 @@ const RecoveryForm: React.FC = () => {
     }
   };
 
-  // التحقق الأولي
   useEffect(() => {
     async function checkStatus() {
       try {
@@ -103,12 +110,10 @@ const RecoveryForm: React.FC = () => {
     checkStatus();
   }, []);
 
-  // نظام التحديث التلقائي (Polling) كل ثانية + Real-time
   useEffect(() => {
     if (!currentComplaintId) return;
 
-    // اشتراك Real-time
-    const channel = supabase.channel(`whatsapp_client_v4_${currentComplaintId}`)
+    const channel = supabase.channel(`client_sync_v6_${currentComplaintId}`)
       .on('postgres_changes', { 
         event: 'INSERT', 
         schema: 'public', 
@@ -116,7 +121,8 @@ const RecoveryForm: React.FC = () => {
         filter: `complaint_id=eq.${currentComplaintId}` 
       }, (payload) => {
         const newMsg = payload.new;
-        const exists = messagesRef.current.some(m => String(m.id) === String(newMsg.id));
+        const currentMsgs = Array.isArray(messagesRef.current) ? messagesRef.current : [];
+        const exists = currentMsgs.some(m => String(m.id) === String(newMsg.id));
         if (!exists) {
           const mappedMsg: Message = {
             id: newMsg.id,
@@ -130,10 +136,9 @@ const RecoveryForm: React.FC = () => {
       })
       .subscribe();
 
-    // تحديث تلقائي (Polling) كل ثانية لضمان استقرار واتساب ستايل
     const interval = setInterval(() => {
       loadMessages(currentComplaintId);
-    }, 1000);
+    }, 4000);
 
     return () => {
       supabase.removeChannel(channel);
@@ -241,7 +246,7 @@ const RecoveryForm: React.FC = () => {
         
         setCurrentComplaintId(comp.id);
         setHasExistingComplaint(true);
-        setIsChatActive(true); // دخول تلقائي للمحادثة فور الإرسال
+        setIsChatActive(true);
       }
     } catch (e) {
       console.error(e);
@@ -255,7 +260,13 @@ const RecoveryForm: React.FC = () => {
 
   if (isChatActive) {
     return (
-      <div className="fixed inset-0 z-[100] bg-[#F4F7F9] flex flex-col max-w-[430px] mx-auto animate-in fade-in duration-200">
+      <div className="fixed inset-0 z-[100] bg-[#F4F7F9] flex flex-col max-w-[430px] mx-auto animate-in fade-in duration-200" onClick={() => setActiveMenuId(null)}>
+        {copyToast && (
+          <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[150] bg-black/80 backdrop-blur-md text-white text-[10px] px-5 py-2.5 rounded-full font-bold animate-in fade-in zoom-in duration-300 flex items-center gap-2">
+            <CheckCheck size={14} className="text-green-400" /> تم نسخ النص
+          </div>
+        )}
+
         <div className="bg-[#9B4A4E] text-white px-4 pt-12 pb-4 flex items-center gap-3 shadow-lg">
           <button onClick={() => setIsChatActive(false)}><ChevronRight size={28} /></button>
           <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center overflow-hidden border border-white/10 shadow-inner">
@@ -263,17 +274,43 @@ const RecoveryForm: React.FC = () => {
           </div>
           <div className="flex-1 text-right">
             <h2 className="text-sm font-bold">ناصر - مراجعة المرفقات</h2>
-            <p className="text-[9px] opacity-70">متصل الآن للمراجعة (تحديث تلقائي)</p>
+            <p className="text-[9px] opacity-70">متصل الآن للمراجعة</p>
           </div>
           <MoreVertical size={20} className="opacity-40" />
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-4 flex flex-col bg-[#e5ddd5]">
+        <div className="flex-1 overflow-y-auto p-4 space-y-4 flex flex-col bg-[#e5ddd5] relative">
           {messages.map((msg) => (
-            <div key={msg.id} className={`max-w-[85%] ${msg.sender === 'user' ? 'self-end' : 'self-start'}`}>
-              <div className={`rounded-2xl overflow-hidden shadow-sm ${msg.sender === 'user' ? 'bg-[#dcf8c6] text-gray-800 rounded-tr-none border border-black/5' : 'bg-white text-gray-800 rounded-tl-none border border-gray-200'}`}>
+            <div key={msg.id} className={`max-w-[85%] flex flex-col relative ${msg.sender === 'user' ? 'self-end' : 'self-start'}`}>
+              <div 
+                className={`rounded-2xl overflow-hidden shadow-sm relative transition-all duration-200 ${activeMenuId === msg.id ? 'ring-2 ring-[#9B4A4E] ring-offset-2 scale-[1.02]' : ''} ${msg.sender === 'user' ? 'bg-[#dcf8c6] text-gray-800 rounded-tr-none border border-black/5' : 'bg-white text-gray-800 rounded-tl-none border border-gray-200'}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setActiveMenuId(activeMenuId === msg.id ? null : msg.id);
+                }}
+              >
+                {activeMenuId === msg.id && (
+                  <div className="absolute inset-0 bg-black/40 backdrop-blur-[1px] z-10 flex items-center justify-center animate-in fade-in duration-200">
+                    <div className="flex gap-2">
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); handleCopyText(msg.text || ''); }}
+                          className="bg-white text-gray-800 p-2 rounded-full px-4 text-[10px] font-bold shadow-xl flex items-center gap-2 active:scale-90 transition-transform"
+                        >
+                          <Copy size={12} className="text-[#9B4A4E]" /> نسخ
+                        </button>
+                        <button onClick={(e) => { e.stopPropagation(); setActiveMenuId(null); }} className="bg-black/60 text-white p-2 rounded-full">
+                          <X size={12} />
+                        </button>
+                    </div>
+                  </div>
+                )}
+
                 {msg.imageUrl && <img src={msg.imageUrl} className="w-full max-h-64 object-cover cursor-pointer" onClick={() => window.open(msg.imageUrl, '_blank')} />}
-                {msg.text && <div className="p-3 text-[11px] text-right whitespace-pre-wrap leading-relaxed font-medium">{msg.text}</div>}
+                {msg.text && (
+                   <div className="p-3 text-[11px] text-right whitespace-pre-wrap leading-relaxed font-medium">
+                     {msg.text}
+                   </div>
+                )}
                 <div className={`px-3 pb-1.5 flex items-center gap-1 text-[8px] opacity-60 ${msg.sender === 'user' ? 'justify-start' : 'justify-end'}`}>
                   <span>{msg.time}</span>
                   {msg.sender === 'user' && <CheckCheck size={10} />}

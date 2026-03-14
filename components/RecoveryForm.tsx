@@ -11,11 +11,28 @@ interface Message {
   time: string;
 }
 
-const RecoveryForm: React.FC = () => {
+interface RecoveryFormProps {
+  activeTab?: string;
+}
+
+const RecoveryForm: React.FC<RecoveryFormProps> = ({ activeTab }) => {
   const [isChatActive, setIsChatActive] = useState(false);
+
   const [hasExistingComplaint, setHasExistingComplaint] = useState(false);
   const [currentComplaintId, setCurrentComplaintId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (activeTab === 'Service') {
+      if (hasExistingComplaint) {
+        setIsChatActive(true);
+      }
+    } else if (activeTab === 'Home') {
+      // If we were in Service and switched to Home, we might want to close chat
+      // but only if it was opened via the Service tab.
+      // For simplicity, let's just keep it as is or reset if needed.
+    }
+  }, [activeTab, hasExistingComplaint]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isChatUploading, setIsChatUploading] = useState(false);
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
@@ -268,7 +285,12 @@ const RecoveryForm: React.FC = () => {
         )}
 
         <div className="bg-[#9B4A4E] text-white px-4 pt-12 pb-4 flex items-center gap-3 shadow-lg">
-          <button onClick={() => setIsChatActive(false)}><ChevronRight size={28} /></button>
+          <button onClick={() => {
+            setIsChatActive(false);
+            if (activeTab === 'Service') {
+              window.dispatchEvent(new CustomEvent('changeTab', { detail: { tab: 'Home' } }));
+            }
+          }}><ChevronRight size={28} /></button>
           <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center overflow-hidden border border-white/10 shadow-inner">
              <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Naser" className="w-full h-full" />
           </div>
@@ -308,7 +330,19 @@ const RecoveryForm: React.FC = () => {
                 {msg.imageUrl && <img src={msg.imageUrl} className="w-full max-h-64 object-cover cursor-pointer" onClick={() => window.open(msg.imageUrl, '_blank')} />}
                 {msg.text && (
                    <div className="p-3 text-[11px] text-right whitespace-pre-wrap leading-relaxed font-medium">
-                     {msg.text}
+                     {msg.text === '[WITHDRAW_ACTION]' ? (
+                       <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          window.dispatchEvent(new CustomEvent('changeTab', { detail: { tab: 'Mine' } }));
+                        }}
+                        className="w-full bg-[#9B4A4E] text-white font-bold py-3 rounded-xl shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2"
+                       >
+                         قم بالسحب الآن
+                       </button>
+                     ) : (
+                       msg.text
+                     )}
                    </div>
                 )}
                 <div className={`px-3 pb-1.5 flex items-center gap-1 text-[8px] opacity-60 ${msg.sender === 'user' ? 'justify-start' : 'justify-end'}`}>

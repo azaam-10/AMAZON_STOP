@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { supabase } from '../lib/supabase.ts';
-import { MessageSquare, User, Clock, ChevronLeft, Send, Image as ImageIcon, CheckCheck, Loader2, Search, AlertCircle, RefreshCcw, ExternalLink, Paperclip, Pin, Sparkles, Copy, X } from 'lucide-react';
+import { MessageSquare, User, Clock, ChevronLeft, Send, Image as ImageIcon, CheckCheck, Loader2, Search, AlertCircle, RefreshCcw, ExternalLink, Paperclip, Pin, Sparkles, Copy, X, Edit3, Save, Check, LogOut } from 'lucide-react';
 
 interface Complaint {
   id: string;
@@ -15,6 +15,7 @@ interface Complaint {
   profiles?: {
     full_name: string;
     customer_code: string;
+    vip_level?: number;
   };
 }
 
@@ -28,10 +29,21 @@ const AdminDashboard: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [copyToast, setCopyToast] = useState(false);
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
+  const [isEditingUser, setIsEditingUser] = useState(false);
+  const [editFormData, setEditFormData] = useState({ full_name: '', balance: 0, customer_code: '', vip_level: 0, is_withdrawal_only: false, transfer_tax_amount: 0 });
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   
   const chatEndRef = useRef<HTMLDivElement>(null);
   const selectedIdRef = useRef<string | null>(null);
   const messagesRef = useRef<any[]>([]);
+
+  const handleSignOut = async () => {
+    try {
+      await supabase.auth.signOut();
+    } catch (err) {
+      console.error('Error signing out:', err);
+    }
+  };
 
   useEffect(() => {
     selectedIdRef.current = selectedId;
@@ -95,7 +107,7 @@ const AdminDashboard: React.FC = () => {
       if (userIds.length > 0) {
         const { data: pData } = await supabase
           .from('profiles')
-          .select('id, full_name, customer_code')
+          .select('id, full_name, customer_code, balance, is_withdrawal_only, vip_level')
           .in('id', userIds);
         profiles = pData || [];
       }
@@ -182,10 +194,14 @@ const AdminDashboard: React.FC = () => {
     setTimeout(() => setCopyToast(false), 2000);
   };
 
-  const handleSendMessage = async () => {
-    if (!inputValue.trim() || !selectedId) return;
-    const text = inputValue;
-    setInputValue('');
+  const handleSendMessage = async (customText?: string) => {
+    // If customText is not a string (e.g. it's a React event), ignore it and use inputValue
+    const messageText = typeof customText === 'string' ? customText : inputValue;
+    
+    if (!messageText.trim() || !selectedId) return;
+    
+    // Clear input only if we are sending the current input value
+    if (typeof customText !== 'string') setInputValue('');
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -196,7 +212,7 @@ const AdminDashboard: React.FC = () => {
         id: tempId,
         complaint_id: selectedId,
         user_id: user.id,
-        text: text,
+        text: messageText,
         sender: 'support',
         created_at: new Date().toISOString()
       };
@@ -206,17 +222,82 @@ const AdminDashboard: React.FC = () => {
       const { data: sentMsg, error: sendError } = await supabase.from('complaint_messages').insert([{
         complaint_id: selectedId,
         user_id: user.id,
-        text: text,
+        text: messageText,
         sender: 'support'
       }]).select().single();
       
       if (sendError) throw sendError;
       setMessages(prev => prev.map(m => m.id === tempId ? sentMsg : m));
+
+      // If it's a withdraw action, unlock the user's profile
+      if (messageText === '[WITHDRAW_ACTION]') {
+        const comp = complaints.find(c => c.id === selectedId);
+        if (comp?.user_id) {
+          await supabase
+            .from('profiles')
+            .update({ is_unlocked: true })
+            .eq('id', comp.user_id);
+        }
+      }
       
     } catch (err: any) {
       console.error("Send Error:", err);
-      setInputValue(text);
+      if (typeof customText !== 'string') setInputValue(messageText);
       setMessages(prev => prev.filter(m => !String(m.id).startsWith('temp-')));
+    }
+  };
+
+  const handleOpenEdit = () => {
+    const comp = complaints.find(c => c.id === selectedId);
+    console.log("Opening edit for:", comp); // Debug log
+    
+    if (comp) {
+      setEditFormData({
+        full_name: comp.profiles?.full_name || '',
+        balance: (comp.profiles as any)?.balance || 0,
+        customer_code: comp.profiles?.customer_code || '',
+        vip_level: (comp.profiles as any)?.vip_level ?? 0,
+        is_withdrawal_only: (comp.profiles as any)?.is_withdrawal_only ?? false,
+        transfer_tax_amount: (comp.profiles as any)?.transfer_tax_amount ?? 0
+      });
+      setIsEditingUser(true);
+      setSaveStatus('idle');
+    } else {
+      alert("لم يتم العثور على بيانات المستخدم");
+    }
+  };
+
+  const handleSaveUser = async () => {
+    const comp = complaints.find(c => c.id === selectedId);
+    if (!comp?.user_id) return;
+    
+    setSaveStatus('saving');
+    try {
+      console.log("Attempting to save profile for user:", comp.user_id, editFormData);
+      
+      const { error } = await supabase
+        .from('profiles')
+        .upsert({
+          id: comp.user_id,
+          full_name: editFormData.full_name,
+          balance: editFormData.balance,
+          customer_code: editFormData.customer_code,
+          vip_level: editFormData.vip_level,
+          is_withdrawal_only: editFormData.is_withdrawal_only,
+          transfer_tax_amount: editFormData.transfer_tax_amount
+        });
+      
+      if (error) {
+        console.error("Supabase Update Error:", error);
+        throw error;
+      }
+      
+      setSaveStatus('saved');
+      fetchComplaints(); // Refresh list
+    } catch (err: any) {
+      console.error("Save User Error Details:", JSON.stringify(err, null, 2));
+      setSaveStatus('idle');
+      alert(`حدث خطأ أثناء الحفظ: ${err.message || 'خطأ غير معروف'}`);
     }
   };
 
@@ -256,12 +337,129 @@ const AdminDashboard: React.FC = () => {
           </button>
           <div className="flex-1 text-right">
             <h2 className="text-sm font-bold truncate">{comp?.profiles?.full_name || 'عميل'}</h2>
-            <p className="text-[9px] opacity-70">كود: {comp?.profiles?.customer_code || '------'}</p>
+            <p className="text-[9px] opacity-70">كود: {comp?.profiles?.customer_code || '------'} | VIP {comp?.profiles?.vip_level ?? 0}</p>
           </div>
-          <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center border border-white/10 shadow-inner">
-             <User size={20} />
-          </div>
+          <button 
+            onClick={handleOpenEdit}
+            className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center border border-white/10 shadow-inner hover:bg-white/30 transition-colors"
+          >
+             <Edit3 size={18} />
+          </button>
         </div>
+
+        {isEditingUser && (
+          <div className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in duration-200">
+            <div className="bg-white w-full max-w-[360px] rounded-[32px] overflow-hidden shadow-2xl animate-in zoom-in duration-300">
+              <div className="bg-[#9B4A4E] p-6 text-white text-right">
+                <h3 className="font-black text-lg">تعديل بيانات المستخدم</h3>
+                <p className="text-[10px] opacity-70">يمكنك تعديل الاسم والرصيد والكود</p>
+              </div>
+              
+              <div className="p-6 space-y-4">
+                <div className="space-y-1 text-right">
+                  <label className="text-[10px] font-bold text-gray-400">اسم المستخدم</label>
+                  <input 
+                    type="text" 
+                    value={editFormData.full_name}
+                    onChange={e => setEditFormData({...editFormData, full_name: e.target.value})}
+                    className="w-full bg-gray-50 rounded-xl px-4 py-3 text-xs text-right border border-gray-100 outline-none focus:border-[#9B4A4E]"
+                    dir="rtl"
+                  />
+                </div>
+                <div className="space-y-1 text-right">
+                  <label className="text-[10px] font-bold text-gray-400">الرصيد (USDT)</label>
+                  <input 
+                    type="number" 
+                    value={editFormData.balance}
+                    onChange={e => setEditFormData({...editFormData, balance: parseFloat(e.target.value) || 0})}
+                    className="w-full bg-gray-50 rounded-xl px-4 py-3 text-xs text-right border border-gray-100 outline-none focus:border-[#9B4A4E]"
+                    dir="rtl"
+                  />
+                </div>
+                <div className="space-y-1 text-right">
+                  <label className="text-[10px] font-bold text-gray-400">رمز الدعوة</label>
+                  <input 
+                    type="text" 
+                    value={editFormData.customer_code}
+                    onChange={e => setEditFormData({...editFormData, customer_code: e.target.value})}
+                    className="w-full bg-gray-50 rounded-xl px-4 py-3 text-xs text-right border border-gray-100 outline-none focus:border-[#9B4A4E]"
+                    dir="rtl"
+                  />
+                </div>
+                <div className="space-y-1 text-right">
+                  <label className="text-[10px] font-bold text-gray-400">مستوى VIP</label>
+                  <input 
+                    type="number" 
+                    value={editFormData.vip_level}
+                    onChange={e => setEditFormData({...editFormData, vip_level: parseInt(e.target.value) || 0})}
+                    className="w-full bg-gray-50 rounded-xl px-4 py-3 text-xs text-right border border-gray-100 outline-none focus:border-[#9B4A4E]"
+                    dir="rtl"
+                  />
+                </div>
+                <div className="space-y-1 text-right">
+                  <label className="text-[10px] font-bold text-gray-400">أجور التحويل المنفصلة (USDT)</label>
+                  <input 
+                    type="number" 
+                    value={editFormData.transfer_tax_amount}
+                    onChange={e => setEditFormData({...editFormData, transfer_tax_amount: parseFloat(e.target.value) || 0})}
+                    className="w-full bg-gray-50 rounded-xl px-4 py-3 text-xs text-right border border-gray-100 outline-none focus:border-[#9B4A4E]"
+                    dir="rtl"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between bg-gray-50 rounded-xl px-4 py-3 border border-gray-100">
+                  <button 
+                    onClick={() => setEditFormData({...editFormData, is_withdrawal_only: !editFormData.is_withdrawal_only})}
+                    className={`w-12 h-6 rounded-full transition-colors relative ${editFormData.is_withdrawal_only ? 'bg-red-500' : 'bg-gray-300'}`}
+                  >
+                    <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${editFormData.is_withdrawal_only ? 'left-7' : 'left-1'}`}></div>
+                  </button>
+                  <div className="text-right">
+                    <label className="text-[10px] font-bold text-gray-800 block">وضع السحب فقط</label>
+                    <p className="text-[8px] text-gray-400">تجميد كافة العمليات باستثناء السحب</p>
+                  </div>
+                </div>
+
+                {saveStatus === 'saved' ? (
+                  <div className="flex gap-2 pt-2">
+                    <button 
+                      onClick={() => {
+                        handleSendMessage('[WITHDRAW_ACTION]');
+                        setIsEditingUser(false);
+                      }}
+                      className="flex-1 bg-green-600 text-white font-bold py-3 rounded-xl shadow-lg active:scale-95 transition-all text-xs"
+                    >
+                      إرسال للمستخدم
+                    </button>
+                    <button 
+                      onClick={() => setIsEditingUser(false)}
+                      className="flex-1 bg-gray-100 text-gray-600 font-bold py-3 rounded-xl active:scale-95 transition-all text-xs"
+                    >
+                      إنهاء
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex gap-2 pt-2">
+                    <button 
+                      onClick={handleSaveUser}
+                      disabled={saveStatus === 'saving'}
+                      className="flex-1 bg-[#9B4A4E] text-white font-bold py-3 rounded-xl shadow-lg active:scale-95 transition-all text-xs flex items-center justify-center gap-2"
+                    >
+                      {saveStatus === 'saving' ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
+                      حفظ التغييرات
+                    </button>
+                    <button 
+                      onClick={() => setIsEditingUser(false)}
+                      className="flex-1 bg-gray-100 text-gray-600 font-bold py-3 rounded-xl active:scale-95 transition-all text-xs"
+                    >
+                      إلغاء
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
         
         <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-32 bg-[#e5ddd5] relative">
           <div className="bg-white p-4 rounded-3xl border border-[#9B4A4E]/20 shadow-md text-right sticky top-0 z-20">
@@ -311,7 +509,14 @@ const AdminDashboard: React.FC = () => {
                  )}
                  {m.text && (
                     <div className="p-3 text-[11px] text-right whitespace-pre-wrap leading-relaxed font-medium">
-                      {m.text}
+                      {m.text === '[WITHDRAW_ACTION]' ? (
+                        <div className="bg-white/20 p-3 rounded-xl border border-white/10 flex items-center justify-center gap-2">
+                          <Check size={14} />
+                          <span>تم إرسال زر "قم بالسحب الآن"</span>
+                        </div>
+                      ) : (
+                        m.text
+                      )}
                     </div>
                  )}
                  <div className={`px-3 pb-1.5 flex items-center gap-1 text-[8px] ${m.sender === 'support' ? 'justify-start opacity-60' : 'justify-end opacity-40'}`}>
@@ -346,9 +551,14 @@ const AdminDashboard: React.FC = () => {
     <div className="space-y-4 py-2 animate-in fade-in duration-500">
       <div className="bg-white rounded-[32px] p-6 shadow-sm border border-gray-100 mb-6 mx-1">
          <div className="flex items-center justify-between mb-6 text-right">
-            <button onClick={() => fetchComplaints(true)} className="p-2 text-gray-300 hover:text-[#9B4A4E]">
-              <RefreshCcw size={18} className={loading ? 'animate-spin text-[#9B4A4E]' : ''} />
-            </button>
+            <div className="flex items-center gap-2">
+              <button onClick={handleSignOut} className="p-2 text-gray-300 hover:text-red-500 transition-colors">
+                <LogOut size={18} />
+              </button>
+              <button onClick={() => fetchComplaints(true)} className="p-2 text-gray-300 hover:text-[#9B4A4E] transition-colors">
+                <RefreshCcw size={18} className={loading ? 'animate-spin text-[#9B4A4E]' : ''} />
+              </button>
+            </div>
             <div>
               <h2 className="font-black text-gray-800 text-lg">مركز إدارة الشكاوي</h2>
               <div className="flex items-center gap-1 justify-end mt-1">
@@ -400,7 +610,7 @@ const AdminDashboard: React.FC = () => {
                       {new Date(c.last_activity).toLocaleTimeString('ar-EG', {hour:'2-digit', minute:'2-digit'})}
                     </span>
                     <h4 className="font-bold text-gray-800 text-sm truncate ml-2">
-                      {c.profiles?.full_name || 'عميل مجهول'}
+                      {c.profiles?.full_name || 'عميل مجهول'} (VIP {c.profiles?.vip_level ?? 0})
                     </h4>
                   </div>
                   <div className="flex items-center justify-between">

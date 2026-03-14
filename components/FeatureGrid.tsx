@@ -1,20 +1,23 @@
 
 import React from 'react';
-import { Headphones } from 'lucide-react';
+import { Users, FileText, History, UserPlus } from 'lucide-react';
 
 const features = [
-  { id: 'support', label: 'الدعم المباشر', icon: <Headphones className="text-pink-500" size={28} /> },
+  { id: 'teams', label: 'Teams', icon: <Users className="text-[#F5B400]" size={28} /> },
+  { id: 'record', label: 'Record', icon: <FileText className="text-[#4ADE80]" size={28} /> },
+  { id: 'wallet', label: 'Wallet management', icon: <History className="text-[#F87171]" size={28} /> },
+  { id: 'invite', label: 'Invite friends', icon: <UserPlus className="text-[#60A5FA]" size={28} /> },
 ];
 
 const FeatureGrid: React.FC = () => {
   return (
-    <div className="bg-white rounded-3xl py-6 px-2 flex justify-center shadow-sm border border-gray-100 my-4">
+    <div className="bg-white py-6 px-4 flex justify-between shadow-sm border-b border-gray-50">
       {features.map((feature) => (
-        <button key={feature.id} className="flex flex-col items-center gap-2 transition-transform active:scale-95 px-8">
-          <div className="w-12 h-12 bg-gray-50 rounded-2xl flex items-center justify-center mb-1 shadow-inner">
+        <button key={feature.id} className="flex flex-col items-center gap-2 transition-transform active:scale-95">
+          <div className="w-12 h-12 flex items-center justify-center mb-0.5">
             {feature.icon}
           </div>
-          <span className="text-[10px] text-gray-700 font-bold text-center leading-tight">
+          <span className="text-[11px] text-gray-600 font-medium text-center leading-tight max-w-[70px]">
             {feature.label}
           </span>
         </button>

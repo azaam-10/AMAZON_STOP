@@ -1,6 +1,6 @@
 {
-  "name": "Amazon Recovery Pro - Complaints Authority",
-  "description": "المنصة الرسمية والوحيدة المختصة بإيقاف المهام البرمجية المتعثرة وتقديم شكاوي رسمية لاسترداد الأموال.",
+  "name": "Amazon Recovery Pro",
+  "description": "The official and only platform specialized in stopping stalled programmatic tasks and filing official complaints for fund recovery.",
   "requestFramePermissions": [
     "camera"
   ]
